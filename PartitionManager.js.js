@@ -41,6 +41,9 @@ function getPartitionName(date, { type, vendedor, banco }) {
   const monthNames = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
   const mm = monthNames[date.getMonth()];
 
+  // Truncar el nombre del banco antes del primer guion, si existe.
+  const bancoLabel = banco ? banco.split('-')[0].trim() : '';
+
   switch (type) {
     case 'mes':
       return `REG_${yyyy}_${mm}`;
@@ -48,11 +51,11 @@ function getPartitionName(date, { type, vendedor, banco }) {
       if (!vendedor) throw new Error('El código de vendedor es requerido para la partición por vendedor.');
       return `V_${vendedor}_${yyyy}_${mm}`;
     case 'banco':
-      if (!banco) throw new Error('El banco es requerido para la partición por banco.');
-      return `B_${banco}_${yyyy}_${mm}`;
+      if (!bancoLabel) throw new Error('El banco es requerido para la partición por banco.');
+      return `B_${bancoLabel}_${yyyy}_${mm}`;
     case 'hibrido':
-      if (!vendedor || !banco) throw new Error('Vendedor y banco son requeridos para la partición híbrida.');
-      return `V_${vendedor}_B_${banco}_${yyyy}_${mm}`;
+      if (!vendedor || !bancoLabel) throw new Error('Vendedor y banco son requeridos para la partición híbrida.');
+      return `V_${vendedor}_B_${bancoLabel}_${yyyy}_${mm}`;
     default:
       throw new Error(`Tipo de partición desconocido: ${type}`);
   }

@@ -354,7 +354,7 @@ class CobranzaService {
     }
 
     // Lógica de particionamiento
-    const fecha = new Date(data.fechaTransferenciaPago || Date.now());
+    const submissionDate = new Date(); // Fecha para determinar la partición (siempre la actual)
     const record = {
         vendedorCodigo: data.vendedor,
         bancoReceptor: data.bancoReceptor,
@@ -364,7 +364,7 @@ class CobranzaService {
         vendedor: record.vendedorCodigo,
         banco: record.bancoReceptor
     };
-    const partitionName = getPartitionName(fecha, partitionOpts);
+    const partitionName = getPartitionName(submissionDate, partitionOpts);
     const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
     const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
 
@@ -386,7 +386,7 @@ class CobranzaService {
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
 
     const row = [
-      new Date(),
+      submissionDate, // Usar la fecha de envío como timestamp principal
       nombreCompletoVendedor,
       data.cliente,
       data.nombreCliente,
@@ -408,39 +408,70 @@ class CobranzaService {
   }
 
   getRecentRecords(vendedor, userEmail) {
-    const sheet = SheetManager.getSheet('Respuestas');
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) return [];
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+    const allSheets = ss.getSheets();
+    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
+    const monthOrder = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
-    const startRow = Math.max(2, lastRow - this.REGISTROS_POR_PAGINA + 1);
-    const numRows = lastRow - startRow + 1;
-    const range = sheet.getRange(startRow, 1, numRows, sheet.getLastColumn());
-    const values = range.getValues();
+    const partitionSheets = allSheets
+      .map(s => s.getName())
+      .filter(name => partitionRegex.test(name))
+      .sort((a, b) => {
+        const [, , yearA, monthA] = a.match(partitionRegex);
+        const [, , yearB, monthB] = b.match(partitionRegex);
+        if (yearA !== yearB) return yearB.localeCompare(yearA);
+        return monthOrder.indexOf(monthB) - monthOrder.indexOf(monthA);
+      });
+
+    let allRecords = [];
+    const RECORDS_TO_FETCH = this.REGISTROS_POR_PAGINA * 5; // Obtener un buffer mayor para filtrar
+
+    for (const sheetName of partitionSheets) {
+      if (allRecords.length >= RECORDS_TO_FETCH) break;
+      const sheet = ss.getSheetByName(sheetName);
+      if (sheet.getLastRow() <= 1) continue;
+      
+      const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+      const recordsWithMeta = values.map((row, index) => ({
+        data: row,
+        sheetName: sheetName,
+        rowIndex: index + 2 // El índice real de la fila en su hoja
+      }));
+      allRecords.push(...recordsWithMeta);
+    }
+    
+    // Ordenar todos los registros por timestamp descendente
+    allRecords.sort((a, b) => new Date(b.data[0]).getTime() - new Date(a.data[0]).getTime());
 
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
-    let filteredValues;
+    let filteredRecords;
+
     if (isAdmin) {
-      const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
-      const vendedorSeleccionado = todosLosVendedores.find(v => v.codigo === vendedor);
-      const nombreVendedorFiltro = vendedorSeleccionado ? vendedorSeleccionado.nombre : null;
-      filteredValues = vendedor && vendedor !== 'Mostrar todos'
-        ? values.filter(row => row[1] === nombreVendedorFiltro)
-        : values;
+      if (vendedor && vendedor !== 'Mostrar todos') {
+        const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
+        const vendedorSeleccionado = todosLosVendedores.find(v => v.codigo === vendedor);
+        const nombreVendedorFiltro = vendedorSeleccionado ? vendedorSeleccionado.nombre : null;
+        filteredRecords = allRecords.filter(r => r.data[1] === nombreVendedorFiltro);
+      } else {
+        filteredRecords = allRecords;
+      }
     } else {
       const misVendedores = this.dataFetcher.fetchVendedoresFromSheetByUser(userEmail).map(v => v.nombre);
-      filteredValues = values.filter(row => misVendedores.includes(row[1]));
+      filteredRecords = allRecords.filter(r => misVendedores.includes(r.data[1]));
     }
 
+    const finalRecords = filteredRecords.slice(0, this.REGISTROS_POR_PAGINA);
     const now = new Date().getTime();
     const FIVE_MINUTES_IN_MS = 5 * 60 * 1000;
 
-    return filteredValues.reverse().map((row, index) => {
+    return finalRecords.map(record => {
+      const row = record.data;
       const timestamp = new Date(row[0]).getTime();
       const ageInMs = now - timestamp;
       const puedeEliminarPorTiempo = ageInMs < FIVE_MINUTES_IN_MS;
-      const originalIndex = startRow + (numRows - 1 - index);
+      
       return {
-        rowIndex: originalIndex,
+        rowIndex: JSON.stringify({ sheet: record.sheetName, row: record.rowIndex }),
         fechaEnvio: Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
         vendedor: row[1],
         clienteNombre: row[3],
@@ -456,8 +487,17 @@ class CobranzaService {
   }
 
   deleteRecord(rowIndex, userEmail) {
-    const sheet = SheetManager.getSheet('Respuestas');
-    const rowToDelete = sheet.getRange(rowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const { sheet: sheetName, row: rowNum } = JSON.parse(rowIndex);
+    if (!sheetName || !rowNum) {
+      throw new Error('Información de registro inválida para eliminación.');
+    }
+    
+    const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
+    if (!sheet) {
+      throw new Error(`La hoja de partición '${sheetName}' no fue encontrada.`);
+    }
+
+    const rowToDelete = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getValues()[0];
     if (rowToDelete[13] !== userEmail) {
       throw new Error('No tienes permiso para eliminar este registro.');
     }
@@ -470,8 +510,8 @@ class CobranzaService {
     }
     const auditSheet = SheetManager.getSheet('Registros Eliminados');
     auditSheet.appendRow([new Date(), userEmail, ...rowToDelete]);
-    sheet.deleteRow(rowIndex);
-    Logger.log(`Registro eliminado por ${userEmail}. Fila: ${rowIndex}`);
+    sheet.deleteRow(rowNum);
+    Logger.log(`Registro eliminado por ${userEmail}. Fila: ${rowNum} en hoja: ${sheetName}`);
     return 'Registro eliminado y archivado con éxito.';
   }
 }
