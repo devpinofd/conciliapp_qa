@@ -11,10 +11,16 @@
  * @returns {string} El tipo de partición ('mes', 'vendedor', 'banco').
  */
 function decidePartitionType(record) {
-  if (record.vendedorCodigo) {
+  const hasVendedor = !!record.vendedorCodigo;
+  const hasBanco = !!record.bancoReceptor;
+
+  if (hasVendedor && hasBanco) {
+    return 'hibrido';
+  }
+  if (hasVendedor) {
     return 'vendedor';
   }
-  if (record.bancoReceptor) {
+  if (hasBanco) {
     return 'banco';
   }
   return 'mes';
@@ -32,7 +38,8 @@ function decidePartitionType(record) {
  */
 function getPartitionName(date, { type, vendedor, banco }) {
   const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const monthNames = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const mm = monthNames[date.getMonth()];
 
   switch (type) {
     case 'mes':
