@@ -58,7 +58,7 @@
                     <div class="form-grid-item">
                         <label for="filtro-sucursal">Sucursal:</label>
                         <select id="filtro-sucursal" name="filtro-sucursal" disabled>
-                            <option value="todas">Cargando...</option>
+                            <option value="TODAS">Cargando...</option>
                         </select>
                     </div>
                 </div>
@@ -186,6 +186,33 @@
                 ui.toggleLoading(false);
             }
         }
+
+        async function populateBranchFilter() {
+            try {
+                const branches = await runGoogleScript('getSucursalesDisponibles', sessionToken);
+                ui.filterBranch.innerHTML = ''; // Limpiar opciones
+                
+                if (user.role === 'Admin' || user.branch === 'TODAS') {
+                    ui.filterBranch.innerHTML += '<option value="TODAS">Todas las sucursales</option>';
+                }
+
+                if (branches && branches.length > 0) {
+                    branches.forEach(branch => {
+                        ui.filterBranch.innerHTML += `<option value="${branch}">${branch}</option>`;
+                    });
+                    ui.filterBranch.disabled = false;
+                } else if (user.role !== 'Admin' && user.branch !== 'TODAS') {
+                    // Si no tiene sucursales de la API pero sí en su perfil
+                    ui.filterBranch.innerHTML = `<option value="${user.branch}">${user.branch}</option>`;
+                } else {
+                    ui.filterBranch.innerHTML = '<option value="TODAS">No hay sucursales específicas</option>';
+                }
+                
+            } catch (error) {
+                ui.showNotification('Error al cargar sucursales: ' + error.message, 'error');
+                ui.filterBranch.innerHTML = '<option value="TODAS">Error al cargar</option>';
+            }
+        }
         
         function setupEventListeners() {
             ui.logoutButton.addEventListener('click', () => {
@@ -197,7 +224,6 @@
             ui.filterStatus.addEventListener('change', loadRecords);
             ui.filterBranch.addEventListener('change', loadRecords);
 
-            // Delegación de eventos para los botones de acción
             ui.tableBody.addEventListener('click', (event) => {
                 const target = event.target;
                 const identifier = target.dataset.identifier;
@@ -214,27 +240,21 @@
                     const reason = prompt('Por favor, ingrese el motivo del rechazo:');
                     if (reason && reason.trim() !== '') {
                         handleAction(identifier, 'Rechazado', reason.trim());
-                    } else if (reason !== null) { // Si el usuario no canceló pero no escribió nada
+                    } else if (reason !== null) {
                         ui.showNotification('Debe proporcionar un motivo para rechazar.', 'error');
                     }
                 }
             });
-
-            // Poblar filtro de sucursal
-            if (user.role === 'Admin' || user.branch === 'TODAS') {
-                ui.filterBranch.disabled = false;
-                ui.filterBranch.innerHTML = '<option value="TODAS">Todas las sucursales</option>';
-                 // Aquí se podría añadir lógica para cargar dinámicamente las sucursales
-            } else {
-                ui.filterBranch.innerHTML = `<option value="${user.branch}" selected>${user.branch}</option>`;
-            }
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
+        async function initializeView() {
             console.log("Vista de Analista cargada para el usuario:", user);
             setupEventListeners();
-            loadRecords();
-        });
+            await populateBranchFilter();
+            await loadRecords();
+        }
+
+        document.addEventListener('DOMContentLoaded', initializeView);
     </script>
 </body>
 </html>

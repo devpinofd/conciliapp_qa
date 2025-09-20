@@ -300,6 +300,24 @@ class DataFetcher {
       codigo: String(row[0]).trim()
     })).filter(b => b.nombre && b.codigo);
   }
+  fetchSucursalesPorUsuarioFromApi() {
+    const props = PropertiesService.getScriptProperties();
+    const query = props.getProperty('SUCURSALES_USUARIO_QUERY');
+    if (!query) {
+      Logger.error('La propiedad SUCURSALES_USUARIO_QUERY no está definida.');
+      throw new Error('No se encontró la consulta para cargar sucursales por usuario.');
+    }
+    try {
+      const data = this.api.fetchData(query);
+      return data.map(row => ({
+        nombre: String(row.nom_suc).trim(),
+        usuario: String(row.cod_usu).trim().toLowerCase()
+      }));
+    } catch (e) {
+      Logger.error(`Error en fetchSucursalesPorUsuarioFromApi: ${e.message}`, { query });
+      return [];
+    }
+  }
 }
 
 class CobranzaService {
@@ -537,19 +555,18 @@ class CobranzaService {
             const recordSucursal = row[sucursalIndex];
             const recordEstado = row[estadoIndex];
 
-            const scopeMatch = (user.branch === 'TODAS' || user.branch === recordSucursal);
+            const scopeMatch = (user.branch === 'TODAS' || filters.branch === 'TODAS' || user.branch === recordSucursal || filters.branch === recordSucursal);
             const statusMatch = (filters.status === 'Todos' || filters.status === recordEstado);
             
             return scopeMatch && statusMatch;
         });
 
-        const recordsWithMeta = filteredValues.map((row, index) => {
+        const recordsWithMeta = filteredValues.map((row) => {
             const recordObject = {};
             headers.forEach((header, i) => {
                 recordObject[header] = row[i];
             });
-            // El rowIndex original es necesario para las actualizaciones
-            const originalIndexInSheet = values.findIndex(originalRow => originalRow[14] === row[14]); // Busca por ID único
+            const originalIndexInSheet = values.findIndex(originalRow => originalRow[14] === row[14]);
             recordObject.recordIdentifier = JSON.stringify({ sheet: sheet.getName(), row: originalIndexInSheet + 2 });
             return recordObject;
         });
@@ -596,6 +613,18 @@ class CobranzaService {
     Logger.log(`El analista ${user.email} actualizó el registro ID ${recordId} a estado '${newStatus}'.`);
     
     return `Registro actualizado a '${newStatus}' con éxito.`;
+  }
+
+  getSucursalesParaAnalista(user) {
+    return CacheManager.get('sucursales_por_usuario', 3600, () => {
+      const todasLasAsignaciones = this.dataFetcher.fetchSucursalesPorUsuarioFromApi();
+      const misSucursales = todasLasAsignaciones
+        .filter(asignacion => asignacion.usuario === user.email)
+        .map(asignacion => asignacion.nombre);
+      
+      // Eliminar duplicados si un usuario está asignado varias veces a la misma sucursal
+      return [...new Set(misSucursales)];
+    });
   }
 
   deleteRecord(rowIndex, userEmail) {
@@ -729,7 +758,7 @@ function checkAuth(token) {
     const branchIndex = headers.indexOf('Sucursal');
     const salesGroupIndex = headers.indexOf('GrupoVentas');
 
-    const userRow = data.find(row => row[emailIndex] === userEmail);
+    const userRow = data.find(row => row[emailIndex].toLowerCase() === userEmail.toLowerCase());
 
     if (userRow) {
       return {
@@ -798,10 +827,23 @@ function enviarDatos(token, datos) { return withAuth(token, (user) => cobranzaSe
 function obtenerRegistrosEnviados(token, vendedorFiltro) { return withAuth(token, (user) => cobranzaService.getRecentRecords(vendedorFiltro, user.email)); }
 function getRecordsForAnalyst(token, filters) { return withAuth(token, (user) => cobranzaService.getRecordsForAnalyst(user, filters)); }
 function updateRecordStatus(token, identifier, newStatus, comment) { return withAuth(token, (user) => cobranzaService.updateRecordStatus(user, identifier, newStatus, comment)); }
+function getSucursalesDisponibles(token) { return withAuth(token, (user) => cobranzaService.getSucursalesParaAnalista(user)); }
 function eliminarRegistro(token, rowIndex) { return withAuth(token, (user) => cobranzaService.deleteRecord(rowIndex, user.email)); }
 function descargarRegistrosPDF(token, vendedorFiltro) { return withAuth(token, (user) => { try { const tz = Session.getScriptTimeZone(); const now = new Date(); const end = new Date(Utilities.formatDate(now, tz, 'yyyy/MM/dd 23:59:59')); const y = new Date(now); y.setDate(now.getDate() - 1); const start = new Date(Utilities.formatDate(y, tz, 'yyyy/MM/dd 00:00:00')); const reportService = new ReportService(new DataFetcher()); const records = reportService.getRecordsInDateRange(user.email, vendedorFiltro, start, end); const meta = { user, rangeLabel: `desde ${Utilities.formatDate(start, tz, 'dd/MM/yyyy HH:mm')} hasta ${Utilities.formatDate(end, tz, 'dd/MM/yyyy HH:mm')}`, filename: `Registros_${Utilities.formatDate(y, tz, 'yyyyMMdd')}_${Utilities.formatDate(now, tz, 'yyyyMMdd')}.pdf` }; const pdf = reportService.buildPdf(records, meta); return { filename: meta.filename, base64: Utilities.base64Encode(pdf.getBytes()) }; } catch (e) { Logger.error(`Error en descargarRegistrosPDF: ${e.message}`); throw e; } }); }
 function sincronizarVendedoresDesdeApi() { const dataFetcher = new DataFetcher(); const api = dataFetcher.api; const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario'); const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`; const vendedores = api.fetchData(query); if (vendedores && vendedores.length > 0) { sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent(); const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]); sheet.getRange(2, 1, values.length, values[0].length).setValues(values); Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`); return `Sincronización completada. ${vendedores.length} vendedores actualizados.`; } else { Logger.log('Sincronización de vendedores: No se encontraron registros.'); return 'No se encontraron vendedores para sincronizar.'; } }
-function setApiQueries() { const props = PropertiesService.getScriptProperties(); const facturasQuery = `SELECT TRIM(cc.documento) AS documento, CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal, CAST(cc.fec_ini AS DATE) AS fec_ini, 'USD' AS cod_mon FROM cuentas_cobrar cc JOIN clientes c ON c.cod_cli = cc.cod_cli WHERE cc.cod_tip = 'FACT' AND cc.cod_cli = '{safeCodCliente}' AND cc.cod_ven = '{safeCodVendedor}' ORDER BY cc.fec_ini DESC`; props.setProperty('FACTURAS_QUERY', facturasQuery); const vendedoresQuery = `SELECT TRIM(correo) AS correo,  TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores;`; props.setProperty('VENDEDORES_QUERY', vendedoresQuery); const clientesQuery = `SELECT DISTINCT TRIM(COD_CLI) AS Codigo_Cliente, TRIM(NOM_CLI) AS Nombre FROM ( SELECT COD_CLI, NOM_CLI FROM CLIENTES WHERE COD_VEN = '{codVendedor}' UNION SELECT precios_clientes.COD_REG AS Codigo_Cliente, clientes.NOM_CLI AS Nombre FROM precios_clientes JOIN CLIENTES ON clientes.COD_CLI = precios_clientes.COD_REG WHERE precios_clientes.COD_ART = '{codVendedor}' ) AS Combinada ORDER BY TRIM(NOM_CLI) ASC`; props.setProperty('CLIENTES_QUERY', clientesQuery); }
+
+function setApiQueries() {
+  const props = PropertiesService.getScriptProperties();
+  const facturasQuery = `SELECT TRIM(cc.documento) AS documento, CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal, CAST(cc.fec_ini AS DATE) AS fec_ini, 'USD' AS cod_mon FROM cuentas_cobrar cc JOIN clientes c ON c.cod_cli = cc.cod_cli WHERE cc.cod_tip = 'FACT' AND cc.cod_cli = '{safeCodCliente}' AND cc.cod_ven = '{safeCodVendedor}' ORDER BY cc.fec_ini DESC`;
+  props.setProperty('FACTURAS_QUERY', facturasQuery);
+  const vendedoresQuery = `SELECT TRIM(correo) AS correo,  TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores;`;
+  props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
+  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli  FROM cuentas_cobrar  WHERE cod_tip = 'FACT'    AND cod_ven = '{codVendedor}'   GROUP BY cod_cli) SELECT trim(cf.cod_cli) AS Codigo_Cliente,        trim(c.nom_cli)  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli; `;
+  props.setProperty('CLIENTES_QUERY', clientesQuery);
+  const sucursalesUsuarioQuery = `select s.nom_suc, su.cod_usu from Sucursales_Usuarios su left join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
+  props.setProperty('SUCURSALES_USUARIO_QUERY', sucursalesUsuarioQuery);
+}
+
 function conservarPrimerasPropiedades() { var ultimoIndiceAConservar = 6; var propiedades = PropertiesService.getScriptProperties(); var todasLasClaves = propiedades.getKeys(); todasLasClaves.sort(); todasLasClaves.forEach(function (clave, indice) { if (indice > ultimoIndiceAConservar) { propiedades.deleteProperty(clave); } }); }
 function crearTriggerConservarPropiedades() { var triggers = ScriptApp.getProjectTriggers(); triggers.forEach(function (trigger) { if (trigger.getHandlerFunction() === 'conservarPrimerasPropiedades') { ScriptApp.deleteTrigger(trigger); } }); ScriptApp.newTrigger('conservarPrimerasPropiedades') .timeBased() .atHour(1) .everyDays(1) .create(); }
 function crearTriggerRotacionMensual() { const triggers = ScriptApp.getProjectTriggers(); triggers.forEach(function (trigger) { if (trigger.getHandlerFunction() === 'rotacionMensual_') { ScriptApp.deleteTrigger(trigger); } }); ScriptApp.newTrigger('rotacionMensual_') .timeBased() .onMonthDay(1) .atHour(2) .create(); Logger.log('Trigger de rotación mensual creado/actualizado correctamente.'); }
