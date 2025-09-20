@@ -117,8 +117,8 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
       'Nro. de Referencia', 'Tipo de Cobro', 'Fecha de la Transferencia o Pago',
-      'Observaciones', 'Usuario Creador', 'EstadoRegistro', 'AnalistaAsignado', 
-      'FechaProcesado', 'ComentarioAnalista']
+      'Observaciones', 'Usuario Creador', 'ID Registro', 'Sucursal', 'EstadoRegistro', 
+      'AnalistaAsignado', 'FechaProcesado', 'ComentarioAnalista']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
   'Registros Eliminados': {
@@ -326,7 +326,7 @@ class CobranzaService {
     return CacheManager.get('bancos', 86400, () => this.dataFetcher.fetchBancosFromSheet());
   }
 
-  submitData(data, userEmail) {
+  submitData(data, user) {
     const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
 
     const facturaCsvRaw = data.factura || data.documento || '';
@@ -365,6 +365,9 @@ class CobranzaService {
     const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
+    
+    const nextId = getNextRecordId();
+    const sucursalUsuario = user.branch || 'NO_ASIGNADA';
 
     const row = [
       new Date(),
@@ -380,15 +383,17 @@ class CobranzaService {
       data.tipoCobro,
       data.fechaTransferenciaPago,
       data.observaciones,
-      userEmail,
-      'Pendiente', // EstadoRegistro
-      '',          // AnalistaAsignado
-      '',          // FechaProcesado
-      ''           // ComentarioAnalista
+      user.email,
+      nextId,        // ID Registro
+      sucursalUsuario, // Sucursal
+      'Pendiente',   // EstadoRegistro
+      '',            // AnalistaAsignado
+      '',            // FechaProcesado
+      ''             // ComentarioAnalista
     ];
 
     partitionSheet.appendRow(row);
-    Logger.log(`Formulario enviado por ${userEmail} a la partición ${partitionName}. Facturas: ${facturaCsv}`);
+    Logger.log(`Formulario enviado por ${user.email} a la partición ${partitionName}. ID: ${nextId}`);
     return '¡Datos recibidos con éxito!';
   }
 
@@ -561,6 +566,25 @@ function getWebAppUrl() {
   return ScriptApp.getService().getUrl();
 }
 
+/**
+ * Genera un ID de registro único y autoincremental de forma segura.
+ * @returns {number} El siguiente ID de registro.
+ */
+function getNextRecordId() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000); // Esperar hasta 30 segundos por el bloqueo
+  try {
+    const properties = PropertiesService.getScriptProperties();
+    const lastId = parseInt(properties.getProperty('lastRecordId') || '0');
+    const nextId = lastId + 1;
+    properties.setProperty('lastRecordId', nextId.toString());
+    return nextId;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
 function doGet(e) {
   const params = (e && e.parameter) ? e.parameter : {};
   const token = params.token;
@@ -619,7 +643,7 @@ function obtenerBancos(token) {
   return withAuth(token, () => cobranzaService.getBancos());
 }
 function enviarDatos(token, datos) {
-  return withAuth(token, (user) => cobranzaService.submitData(datos, user.email));
+  return withAuth(token, (user) => cobranzaService.submitData(datos, user));
 }
 function obtenerRegistrosEnviados(token, vendedorFiltro) {
   return withAuth(token, (user) => cobranzaService.getRecentRecords(vendedorFiltro, user.email));
@@ -660,11 +684,11 @@ function sincronizarVendedoresDesdeApi() {
   const dataFetcher = new DataFetcher();
   const api = dataFetcher.api;
   const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
-  const query = `SELECT	TRIM(v.correo) AS correo,TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, s.nom_suc FROM vendedores v join sucursales  s on s.cod_suc=v.cod_suc where v.status='A';`;
+  const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`;
   const vendedores = api.fetchData(query);
   if (vendedores && vendedores.length > 0) {
     sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
-    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor, v.nom_suc]);
+    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]);
     sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
     Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`);
     return `Sincronización completada. ${vendedores.length} vendedores actualizados.`;
