@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Registros - <?= meta.rangeLabel ?></title>
+  <style>
+    @page { size: A4; margin: 14mm 10mm; }
+    :root {
+      --fz-base: 11px;
+      --fz-small: 10px;
+      --pad-cell-y: 2px;
+      --pad-cell-x: 4px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: Arial, sans-serif;
+      font-size: var(--fz-base);
+      line-height: 1.15;
+      color: #0f172a;
+      margin: 0;
+      padding: 0;
+    }
+    h1 {
+      margin: 0 0 4px 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+    .meta {
+      font-size: var(--fz-small);
+      color: #475569;
+      margin: 0 0 8px 0;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: var(--fz-small);
+      line-height: 1.15;
+      table-layout: fixed;
+    }
+    th, td {
+      border: 1px solid #d9dde3;
+      padding: var(--pad-cell-y) var(--pad-cell-x);
+      vertical-align: top;
+    }
+    th {
+      background: #eef1f5;
+      text-align: left;
+      font-weight: 600;
+      font-size: var(--fz-small);
+    }
+    tbody tr {
+      page-break-inside: avoid;
+    }
+    tfoot td {
+      font-weight: 600;
+      background: #f3f5f7;
+    }
+    .right { text-align: right; }
+    .muted { color: #64748b; font-size: 9px; }
+    .empty {
+      border: 1px solid #d9dde3;
+      padding: 10px;
+      text-align: center;
+      color: #64748b;
+      font-size: var(--fz-small);
+      margin-top: 8px;
+    }
+    .wrap { white-space: normal; word-break: break-word; }
+    .obs {
+      white-space: normal;
+      word-break: break-word;
+      overflow: hidden;
+    }
+    /* Si deseas truncar Observaciones a X líneas, descomenta:
+    .obs {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    } */
+    /* Opcional: condensar aún más (descomentar)
+    body, table { font-size: 10px; }
+    th, td { padding: 1px 3px; }
+    */
+  </style>
+</head>
+<body>
+  <h1>Registros enviados</h1>
+  <div class="meta">
+    Rango: <?= meta.rangeLabel ?><br>
+    Usuario: <?= meta.user.name ?> (<?= meta.user.email ?>)<br>
+    Generado: <?= Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm') ?>
+  </div>
+
+  <?
+    // Helpers en JavaScript para el template (HtmlService)
+    function normalizeMoneyToNumber(val) {
+      if (typeof val === 'number') return val;
+      var s = String(val || '').trim();
+      if (!s) return 0;
+      s = s.replace(/\s+/g, '').replace(/[^\d.,\-]/g, '');
+      var hasC = s.indexOf(',') !== -1;
+      var hasD = s.indexOf('.') !== -1;
+      if (hasC && hasD) {
+        var lastC = s.lastIndexOf(',');
+        var lastD = s.lastIndexOf('.');
+        var decSep = lastC > lastD ? ',' : '.';
+        var thouSep = decSep === ',' ? '.' : ',';
+        var reThou = new RegExp('\\' + thouSep, 'g');
+        s = s.replace(reThou, '').replace(decSep, '.');
+        var n = parseFloat(s);
+        return isNaN(n) ? 0 : n;
+      } else if (hasC) {
+        var pc = s.split(',');
+        if (pc.length === 1) return parseFloat(pc[0]) || 0;
+        var dec = pc.pop();
+        var inte = pc.join('');
+        var n1 = parseFloat(inte + '.' + dec);
+        return isNaN(n1) ? 0 : n1;
+      } else if (hasD) {
+        var pd = s.split('.');
+        if (pd.length === 1) return parseFloat(pd[0]) || 0;
+        if (pd.length > 2) return parseFloat(pd.join('')) || 0;
+        var tail = pd[1] || '';
+        if (tail.length === 3) return parseFloat(pd.join('')) || 0;
+        return parseFloat(pd[0] + '.' + tail) || 0;
+      } else {
+        return parseFloat(s.replace(/[^\d\-]/g, '')) || 0;
+      }
+    }
+    function numberToEsVE(n) {
+      var neg = n < 0 ? '-' : '';
+      var abs = Math.abs(n);
+      var fixed = abs.toFixed(2);
+      var parts = fixed.split('.');
+      var intPart = parts[0];
+      var decPart = parts[1];
+      intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      return neg + intPart + ',' + decPart;
+    }
+    function formatMoney(val) {
+      return numberToEsVE(normalizeMoneyToNumber(val));
+    }
+    // Opcional: truncar observaciones largas (descomentar si se desea)
+    // function shorten(text, max) {
+    //   if (!text) return '';
+    //   text = String(text).trim();
+    //   return text.length > max ? text.slice(0, max) + '…' : text;
+    // }
+  ?>
+
+  <? if (!records || records.length === 0) { ?>
+    <div class="empty">No se encontraron registros para el rango seleccionado.</div>
+  <? } else { ?>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:70px;">Fecha</th>
+          <th style="width:90px;">Vendedor</th>
+          <th style="width:120px;">Cliente</th>
+          <th style="width:90px;">Factura(s)</th>
+          <th style="width:60px;" class="right">Monto</th>
+          <th style="width:70px;">Forma</th>
+          <th style="width:80px;">Bco Emisor</th>
+          <th style="width:80px;">Bco Receptor</th>
+          <th style="width:70px;">Ref.</th>
+          <th>Observaciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        <? var total = 0; ?>
+        <? records.forEach(function(r){
+             var montoNum = normalizeMoneyToNumber(r.monto);
+             total += montoNum;
+             var obs = (r.observaciones || '').trim();
+        ?>
+          <tr>
+            <td><?= r.fecha ?></td>
+            <td><?= r.vendedor ?></td>
+            <td><?= r.clienteNombre ?> <span class="muted">(<?= r.clienteCodigo ?>)</span></td>
+            <td class="wrap"><?= r.factura ?></td>
+            <td class="right"><?= formatMoney(r.monto) ?></td>
+            <td><?= r.formaPago ?></td>
+            <td><?= r.bancoEmisor ?></td>
+            <td><?= r.bancoReceptor ?></td>
+            <td><?= r.referencia ?></td>
+            <td class="obs"><?= obs ?></td>
+          </tr>
+        <? }); ?>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="4" class="right">Total</td>
+          <td class="right"><?= numberToEsVE(total) ?></td>
+          <td colspan="5"></td>
+        </tr>
+      </tfoot>
+    </table>
+  <? } ?>
+</body>
+</html>

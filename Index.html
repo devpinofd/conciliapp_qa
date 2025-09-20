@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Formulario de Cobranzas</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-dark-color: #1e40af;
+            --danger-color: #ef4444;
+            --danger-dark-color: #dc2626;
+            --background-light: #f0f9ff;
+            --background-card: #ffffff;
+            --text-dark: #0f172a;
+            --text-light: #334155;
+            --border-color: #cbd5e1;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+        }
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background-color: var(--background-light);
+            margin: 0;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .app-container {
+            width: 100%;
+            max-width: 1200px;
+        }
+        .app-header {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 16px;
+            background-color: var(--background-card);
+            padding: 16px 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px var(--shadow-color);
+            box-sizing: border-box;
+            margin-bottom: 24px;
+        }
+        .app-header h2 {
+            color: var(--text-dark);
+            font-size: 20px;
+            margin: 0;
+        }
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-info span {
+            font-weight: 500;
+            color: var(--text-light);
+        }
+        .card {
+            background: var(--background-card);
+            width: 100%;
+            margin-bottom: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px var(--shadow-color);
+            transition: transform 0.2s ease-in-out;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        .card-header {
+            background: linear-gradient(90deg, #d81d26, #f63b6a);
+            color: #ffffff;
+            padding: 24px;
+            border-top-left-radius: 12px;
+            border-top-right-radius: 12px;
+        }
+        .card-body {
+            padding: 24px;
+        }
+        h1, h2, h3 {
+            margin: 0;
+            font-weight: 600;
+        }
+        .tasa-oficial-text {
+            text-align: center;
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--text-dark);
+            margin-bottom: 16px;
+        }
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+        .form-grid-item {
+            display: flex;
+            flex-direction: column;
+        }
+        label {
+            margin-bottom: 8px;
+            color: var(--text-dark);
+            font-weight: 500;
+            font-size: 15px;
+        }
+        input, textarea, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 16px;
+            background-color: var(--background-card);
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
+        }
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 24px;
+        }
+        .button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.3s, transform 0.1s, box-shadow 0.2s;
+        }
+        .button-primary { background-color: var(--primary-color); color: #ffffff; }
+        .button-primary:hover { background-color: var(--primary-dark-color); transform: translateY(-2px); }
+        .button-danger { background-color: var(--danger-color); color: #ffffff; }
+        .button-danger:hover { background-color: var(--danger-dark-color); transform: translateY(-2px); }
+        .button-secondary { background-color: #e2e8f0; color: var(--text-dark); }
+        .button-secondary:hover { background-color: var(--border-color); transform: translateY(-2px); }
+        
+        .notification { position: fixed; top: 20px; right: 20px; background-color: #10b981; color: #ffffff; padding: 16px; border-radius: 8px; box-shadow: 0 4px 12px var(--shadow-color); z-index: 1001; opacity: 0; transform: translateY(-20px); transition: opacity 0.3s, transform 0.3s; }
+        .notification.visible { opacity: 1; transform: translateY(0); }
+        .notification.error { background-color: var(--danger-color); }
+
+        #facturas-resumen {
+            border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc;
+            padding: 12px 14px; margin-top: 10px; display: none;
+        }
+        #facturas-resumen h4 { margin: 0 0 8px 0; font-size: 14px; color: var(--text-dark); }
+        .resumen-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 13px; }
+        .resumen-grid div span.value { font-weight: 600; color: var(--primary-dark-color); }
+        #resumen-lista { list-style: none; margin: 0; padding: 0; max-height: 90px; overflow-y: auto;
+            font-family: monospace; font-size: 12px; line-height: 1.2em; border-top: 1px dashed var(--border-color); padding-top: 6px; }
+        #resumen-lista li { padding: 2px 0; }
+        
+        .records-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+        .records-table { display: block; }
+        .records-table thead { display: none; }
+        .records-table tbody, .records-table tr { display: block; }
+        .records-table tr {
+            background-color: var(--background-card);
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+        .records-table td {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .records-table td:last-child { border-bottom: none; }
+        .records-table td::before {
+            content: attr(data-label);
+            font-weight: 500;
+            color: var(--text-light);
+        }
+        .ghost-delete { background: none; border: none; cursor: pointer; padding: 4px; }
+        .ghost-delete svg { width: 22px; height: 22px; fill: var(--danger-color); transition: fill 0.3s; }
+        .ghost-delete:hover svg { fill: var(--danger-dark-color); }
+
+        .loading-spinner-container { display: none; position: fixed; z-index: 1001; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); justify-content: center; align-items: center; }
+        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-top: 4px solid var(--primary-color); border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0, 0, 0, 0.6); }
+        .modal-content { background-color: var(--background-card); margin: 40% auto; padding: 24px; border-radius: 12px; width: 90%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); text-align: center; }
+        .modal-buttons { display: flex; justify-content: center; gap: 16px; margin-top: 20px; }
+        
+        .error { color: var(--danger-color); font-size: 14px; margin-top: 4px; display: none; }
+
+        @media screen and (min-width: 768px) {
+            .form-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .form-grid-full-width {
+                grid-column: 1 / -1;
+            }
+            .records-table { display: table; width: 100%; border-collapse: collapse; }
+            .records-table thead { display: table-header-group; }
+            .records-table tbody { display: table-row-group; }
+            .records-table tr { display: table-row; background: none; border: none; box-shadow: none; padding: 0; margin: 0; }
+            .records-table tr:nth-child(even) { background-color: #f8fafc; }
+            .records-table tr:hover { background-color: #f1f5f9; }
+            .records-table th, .records-table td { display: table-cell; padding: 14px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+            .records-table td::before { display: none; }
+            .modal-content { margin: 15% auto; }
+        }
+    </style>
+</head>
+<body>
+    <div id="notification" class="notification"></div>
+    <div id="loading-spinner" class="loading-spinner-container"><div class="spinner"></div></div>
+
+    <div class="app-container">
+        <header class="app-header">
+            <h2>Bienvenido, <?!= user.name ?></h2>
+            <div class="user-info">
+                <span>(<?!= user.email ?>)</span>
+                <button id="logout-button" class="button button-danger">Cerrar Sesión</button>
+            </div>
+        </header>
+
+        <div class="card">
+            <header class="card-header">
+                <h1>Conciliapp - Registro de Cobranzas QA</h1>
+            </header>
+            <main class="card-body">
+                <p id="tasa-oficial" class="tasa-oficial-text">Cargando Tasa Oficial...</p>
+                <form id="formulario">
+                    <div class="form-grid">
+                        <div class="form-grid-item">
+                            <label for="vendedor">Vendedor:</label>
+                            <select id="vendedor" name="vendedor" required>
+                                <option value="" disabled selected>Cargando...</option>
+                            </select>
+                            <span id="vendedorError" class="error">Seleccione un vendedor.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="cliente">Cliente:</label>
+                            <select id="cliente" name="cliente" required disabled>
+                                <option value="" disabled selected>Seleccione un cliente</option>
+                            </select>
+                            <span id="clienteError" class="error">Seleccione un cliente.</span>
+                        </div>
+                        <div class="form-grid-full-width">
+                            <label for="factura">Facturas (selección múltiple):</label>
+                            <select id="factura" name="factura" multiple required disabled></select>
+                            <div id="facturas-resumen">
+                                <h4>Resumen de Selección</h4>
+                                <div class="resumen-grid">
+                                    <div>Facturas: <span class="value" id="resumen-cantidad">0</span></div>
+                                    <div>Total USD: <span class="value" id="resumen-total-usd">0.00</span></div>
+                                    <div>Total Bs: <span class="value" id="resumen-total-bs">0.00</span></div>
+                                </div>
+                                <ul id="resumen-lista"></ul>
+                            </div>
+                            <span id="facturaError" class="error">Seleccione al menos una factura.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="monto-pagado">Monto Pagado:</label>
+                            <input type="number" id="monto-pagado" name="montoPagado" step="0.01" min="0.01" required>
+                            <span id="montoError" class="error">El monto debe ser mayor a 0.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="forma-pago">Forma de Pago:</label>
+                            <select id="forma-pago" name="formaPago" required>
+                                <option value="" disabled selected>Seleccione...</option>
+                                <option value="Transferencia">Transferencia</option>
+                                <option value="Pago Móvil">Pago Móvil</option>
+                                <option value="Efectivo $">Efectivo $</option>
+                                <option value="Zelle">Zelle</option>
+                                <option value="No Aplica">No Aplica</option>
+                            </select>
+                            <span id="formaPagoError" class="error">Seleccione una forma de pago.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="banco_emisor">Banco Emisor:</label>
+                            <select id="banco_emisor" name="bancoEmisor" required>
+                                <option value="" disabled selected>Seleccione un banco</option>
+                                <option value="NO APLICA">NO APLICA</option>
+                                <option value="100% banco (0156)">100% banco (0156)</option>
+                                <option value="Activo (0171)">Activo (0171)</option>
+                                <option value="Banca amiga (0172)">Banca amiga (0172)</option>
+                                <option value="Bancaribe (0114)">Bancaribe (0114)</option>
+                                <option value="Banco Agrícola (0166)">Banco Agrícola (0166)</option>
+                                <option value="Banco del tesoro (0163)">Banco del tesoro (0163)</option>
+                                <option value="Banesco (0134)">Banesco (0134)</option>
+                                <option value="Banplus (0174)">Banplus (0174)</option>
+                                <option value="BNC- Banco Nacional de Crédito (0191)">BNC- Banco Nacional de Crédito (0191)</option>
+                                <option value="del sur (0157)">del sur (0157)</option>
+                                <option value="Exterior (0115)">Exterior (0115)</option>
+                                <option value="Fondo Común (0151)">Fondo Común (0151)</option>
+                                <option value="Mercantil (0105)">Mercantil (0105)</option>
+                                <option value="Plaza (0138)">Plaza (0138)</option>
+                                <option value="Provincial (0108)">Provincial (0108)</option>
+                                <option value="sofitasa (0137)">sofitasa (0137)</option>
+                                <option value="Venezolano de Crédito (0104)">Venezolano de Crédito (0104)</option>
+                                <option value="Venezuela (0102)">Venezuela (0102)</option>
+                            </select>
+                            <span id="bancoEmisorError" class="error">Seleccione un banco emisor.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="banco_receptor">Banco Receptor:</label>
+                            <select id="banco_receptor" name="bancoReceptor" required>
+                                <option value="" disabled selected>Seleccione un banco</option>
+                                <option value="ACTIBS-Activo Bs">ACTIBS-Activo Bs</option>
+                                <option value="BANEBS-Banesco Bs">BANEBS-Banesco Bs</option>
+                                <option value="BANEPM-PAGO MOVIL BANESCO">BANEPM-PAGO MOVIL BANESCO</option>
+                                <option value="BANEUS-BANESCO DIVISAS">BANEUS-BANESCO DIVISAS</option>
+                                <option value="BANPA-Banesco Panama US">BANPA-Banesco Panama US</option>
+                                <option value="BFCBS-BFC BS">BFCBS-BFC BS</option>
+                                <option value="BFCEU-BFC EUROS">BFCEU-BFC EUROS</option>
+                                <option value="BICEBS-BICENTENARIO BS">BICEBS-BICENTENARIO BS</option>
+                                <option value="BNCBS-BNC Bs">BNCBS-BNC Bs</option>
+                                <option value="BNCUS-BNC US">BNCUS-BNC US</option>
+                                <option value="BODBS-BOD BS">BODBS-BOD BS</option>
+                                <option value="CARBS-BANCARIBE BOLIVARES">CARBS-BANCARIBE BOLIVARES</option>
+                                <option value="MERBS-MERCANTIL BS">MERBS-MERCANTIL BS</option>
+                                <option value="MERUS-MERCANTIL US">MERUS-MERCANTIL US</option>
+                                <option value="PLAZBS-PLAZA BS">PLAZBS-PLAZA BS</option>
+                                <option value="PLAZUS-PLAZA US">PLAZUS-PLAZA US</option>
+                                <option value="PROVBS-Banco Provicial Bs">PROVBS-Banco Provicial Bs</option>
+                                <option value="PROVUS-Banco Provicial US">PROVUS-Banco Provicial US</option>
+                                <option value="TESOBS-TESORO BS">TESOBS-TESORO BS</option>
+                                <option value="VZLABS-Banco Venezuela Bs">VZLABS-Banco Venezuela Bs</option>
+                                <option value="VZLAPM-PAGO MOVIL VZLA">VZLAPM-PAGO MOVIL VZLA</option>
+                                <option value="VZLAUS-Banco Venezuela US $">VZLAUS-Banco Venezuela US $</option>
+                                <option value="ZELLE-ZELLE US">ZELLE-ZELLE US</option>
+                            </select>
+                            <span id="bancoReceptorError" class="error">Seleccione un banco receptor.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="nro-referencia">Número de Referencia:</label>
+                            <input type="text" id="nro-referencia" name="nroReferencia" required>
+                            <span id="referenciaError" class="error">Referencia debe tener entre 4 y 20 caracteres.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="tipo-cobro">Tipo de Cobro:</label>
+                            <select id="tipo-cobro" name="tipoCobro" required>
+                                <option value="" disabled selected>Seleccione...</option>
+                                <option value="Abono">Abono</option>
+                                <option value="Cobro Total">Cobro Total</option>
+                                <option value="Retención">Retención</option>
+                            </select>
+                            <span id="tipoCobroError" class="error">Seleccione un tipo de cobro.</span>
+                        </div>
+                        <div class="form-grid-item">
+                            <label for="fecha-transferencia-pago">Fecha del Pago:</label>
+                            <input type="date" id="fecha-transferencia-pago" name="fechaTransferenciaPago" required>
+                            <span id="fechaError" class="error">Seleccione una fecha válida.</span>
+                        </div>
+                        <div class="form-grid-full-width">
+                            <label for="observaciones">Observaciones (Opcional):</label>
+                            <textarea id="observaciones" name="observaciones" rows="3"></textarea>
+                        </div>
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="button button-primary">Enviar Cobranza</button>
+                    </div>
+                </form>
+            </main>
+        </div>
+
+        <div class="card">
+            <header class="card-header records-header">
+                <h2>Registros Recientes</h2>
+                <button id="refresh-data-btn" class="button button-secondary">Refrescar Datos</button>
+                <button id="download-pdf-btn" class="button button-secondary">Descargar PDF (Ayer y Hoy)</button>
+            </header>
+            <main class="card-body">
+                <p id="records-status">Cargando registros...</p>
+                <table class="records-table">
+                    <thead>
+                        <tr>
+                            <th>Acciones</th>
+                            <th>Fecha</th>
+                            <th>Vendedor</th>
+                            <th>Cliente</th>
+                            <th>Factura(s)</th>
+                            <th>Monto</th>
+                            <th>Banco Emisor</th>
+                            <th>Banco Receptor</th>
+                            <th>Referencia</th>
+                        </tr>
+                    </thead>
+                    <tbody id="registros-table-body"></tbody>
+                </table>
+            </main>
+        </div>
+    </div>
+
+    <div id="delete-modal" class="modal">
+        <div class="modal-content">
+            <h3>Confirmar Eliminación</h3>
+            <p>¿Estás seguro de que deseas eliminar este registro? Esta acción no se puede deshacer.</p>
+            <div class="modal-buttons">
+                <button id="cancel-delete-btn" class="button button-secondary">Cancelar</button>
+                <button id="confirm-delete-btn" class="button button-danger">Eliminar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const webAppUrl = "<?!= url ?>";
+        let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
+
+        (function validateInitialToken() {
+            if (!sessionToken) {
+                window.top.location.href = webAppUrl;
+                return;
+            }
+            google.script.run
+                .withSuccessHandler(user => {
+                    if (!user) {
+                        localStorage.removeItem('sessionToken');
+                        window.top.location.href = webAppUrl;
+                    }
+                })
+                .withFailureHandler(() => {
+                    localStorage.removeItem('sessionToken');
+                    window.top.location.href = webAppUrl;
+                })
+                .checkAuth(sessionToken);
+        })();
+
+
+        const clientCache = {
+            TTL: 6 * 3600 * 1000,
+            PREFIX: 'formCobranza_',
+            set(key, data) { try { localStorage.setItem(this.PREFIX + key, JSON.stringify({ timestamp: new Date().getTime(), data })); } catch (e) { console.error("Error guardando en localStorage", e); } },
+            get(key) {
+                try {
+                    const itemStr = localStorage.getItem(this.PREFIX + key);
+                    if (!itemStr) return null;
+                    const item = JSON.parse(itemStr);
+                    if ((new Date().getTime() - item.timestamp) > this.TTL) {
+                        localStorage.removeItem(this.PREFIX + key);
+                        return null;
+                    }
+                    return item.data;
+                } catch (e) { console.error("Error leyendo de localStorage", e); return null; }
+            },
+            clear() { try { Object.keys(localStorage).forEach(key => { if (key.startsWith(this.PREFIX)) localStorage.removeItem(key); }); } catch (e) { console.error("Error limpiando localStorage", e); } }
+        };
+
+        class UiManager {
+            constructor() {
+                this.elements = {
+                    notification: document.getElementById('notification'),
+                    loadingSpinner: document.getElementById('loading-spinner'),
+                    form: document.getElementById('formulario'),
+                    vendedorSelect: document.getElementById('vendedor'),
+                    clienteSelect: document.getElementById('cliente'),
+                    facturaSelect: document.getElementById('factura'),
+                    resumenBox: document.getElementById('facturas-resumen'),
+                    resumenCantidad: document.getElementById('resumen-cantidad'),
+                    resumenTotalUsd: document.getElementById('resumen-total-usd'),
+                    resumenTotalBs: document.getElementById('resumen-total-bs'),
+                    resumenLista: document.getElementById('resumen-lista'),
+                    tasaOficial: document.getElementById('tasa-oficial'),
+                    recordsTableBody: document.getElementById('registros-table-body'),
+                    recordsStatus: document.getElementById('records-status'),
+                    deleteModal: document.getElementById('delete-modal'),
+                    confirmDeleteBtn: document.getElementById('confirm-delete-btn'),
+                    cancelDeleteBtn: document.getElementById('cancel-delete-btn'),
+                    logoutButton: document.getElementById('logout-button')
+                };
+            }
+            toggleLoading(show) { this.elements.loadingSpinner.style.display = show ? 'flex' : 'none'; }
+            showNotification(message, type = 'success') { this.elements.notification.textContent = message; this.elements.notification.className = `notification ${type} visible`; setTimeout(() => this.elements.notification.classList.remove('visible'), 4000); }
+            showDeleteModal() { this.elements.deleteModal.style.display = 'block'; }
+            hideDeleteModal() { this.elements.deleteModal.style.display = 'none'; }
+            updateBcvRate(rate) { this.elements.tasaOficial.textContent = rate ? `Tasa Oficial BCV: Bs. ${rate.toFixed(2)}` : 'Tasa BCV no disponible'; }
+            
+            updateRecordsTable(records) {
+                const tableBody = this.elements.recordsTableBody;
+                tableBody.innerHTML = ''; 
+                if (!records || records.length === 0) {
+                    this.elements.recordsStatus.textContent = 'No hay registros para mostrar.';
+                    this.elements.recordsStatus.style.display = 'block';
+                    return;
+                }
+                this.elements.recordsStatus.style.display = 'none';
+                
+                records.forEach(record => {
+                    const facturas = (record.factura || '').split(',').map(f => f.trim()).filter(Boolean).join(', ');
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td data-label="Acciones">
+                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${record.rowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"></path></svg></button>` : ''}
+                        </td>
+                        <td data-label="Fecha">${record.fechaEnvio || record.fecha}</td>
+                        <td data-label="Vendedor">${record.vendedor}</td>
+                        <td data-label="Cliente">${record.clienteNombre || record.cliente}</td>
+                        <td data-label="Factura(s)">${facturas}</td>
+                        <td data-label="Monto">${record.monto}</td>
+                        <td data-label="Banco Emisor">${record.bancoEmisor}</td>
+                        <td data-label="Banco Receptor">${record.bancoReceptor}</td>
+                        <td data-label="Referencia">${record.referencia}</td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+            }
+
+            resetForm(keepVendor = false) {
+                const vendedorSeleccionado = this.elements.vendedorSelect.value;
+                this.elements.form.reset();
+                if (keepVendor && vendedorSeleccionado) {
+                    this.elements.vendedorSelect.value = vendedorSeleccionado;
+                }
+                this.elements.clienteSelect.innerHTML = '<option value="" disabled selected>Seleccione un cliente</option>';
+                this.elements.clienteSelect.disabled = true;
+                this.elements.facturaSelect.innerHTML = '';
+                this.elements.facturaSelect.disabled = true;
+                this.clearResumen();
+                document.querySelectorAll('.error').forEach(el => el.style.display = 'none');
+            }
+            populateSelect(selectElement, optionsHtml, placeholder = 'Seleccione una opción') {
+                selectElement.innerHTML = `<option value="" disabled selected>${placeholder}</option>` + optionsHtml;
+                selectElement.disabled = false;
+            }
+            updateResumen({ count, totalUsd, totalBs, docs }) {
+                if (count === 0) { this.clearResumen(); return; }
+                this.elements.resumenBox.style.display = 'block';
+                this.elements.resumenCantidad.textContent = count;
+                this.elements.resumenTotalUsd.textContent = totalUsd.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                this.elements.resumenTotalBs.textContent = totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                this.elements.resumenLista.innerHTML = docs.map(d => `<li>${d}</li>`).join('');
+            }
+            clearResumen() {
+                this.elements.resumenBox.style.display = 'none';
+                this.elements.resumenCantidad.textContent = '0';
+                this.elements.resumenTotalUsd.textContent = '0.00';
+                this.elements.resumenTotalBs.textContent = '0.00';
+                this.elements.resumenLista.innerHTML = '';
+            }
+        }
+
+        class DataManager {
+            constructor(ui) {
+                this.ui = ui;
+                this.facturasPendientes = [];
+                this.currentVendedor = null;
+                this.registroToDelete = null;
+                this.bcvRate = null;
+            }
+            
+            async loadInitialData(forceRefresh = false) {
+                this.ui.toggleLoading(true);
+                if (forceRefresh) clientCache.clear();
+                try {
+                    await this.loadBcvRate(forceRefresh);
+                    await this.loadVendedores(forceRefresh);
+                    await this.loadRecords(this.currentVendedor, forceRefresh);
+                } catch (error) {
+                    this.ui.showNotification(`Error al cargar datos: ${error.message}`, 'error');
+                } finally {
+                    this.ui.toggleLoading(false);
+                }
+            }
+            
+            async loadVendedores(forceRefresh = false) {
+                const cacheKey = 'vendedores';
+                let cachedData = forceRefresh ? null : clientCache.get(cacheKey);
+                
+                const processVendedores = async (options) => {
+                    this.ui.populateSelect(this.ui.elements.vendedorSelect, options, 'Seleccione un vendedor');
+                    if (this.ui.elements.vendedorSelect.options.length === 2) { 
+                        this.ui.elements.vendedorSelect.selectedIndex = 1; 
+                        await this.loadClientes(); 
+                    }
+                };
+
+                if (cachedData) {
+                    await processVendedores(cachedData);
+                    return;
+                }
+
+                this.ui.elements.vendedorSelect.innerHTML = '<option disabled selected>Cargando...</option>';
+                this.ui.elements.vendedorSelect.disabled = true;
+                
+                try {
+                    const options = await this.runGoogleScript('loadVendedores', sessionToken, forceRefresh);
+                    clientCache.set(cacheKey, options);
+                    await processVendedores(options);
+                } catch (error) { 
+                    this.ui.elements.vendedorSelect.innerHTML = `<option disabled>Error al cargar</option>`; 
+                    this.ui.showNotification(`Error al cargar vendedores: ${error.message}`, 'error');
+                    throw error;
+                }
+            }
+
+            async loadClientes() {
+                const vendedor = this.ui.elements.vendedorSelect.value;
+                this.currentVendedor = vendedor;
+                this.ui.elements.clienteSelect.disabled = true;
+                this.ui.elements.facturaSelect.disabled = true;
+                this.facturasPendientes = [];
+                this.ui.clearResumen();
+                if (!vendedor || vendedor === 'Mostrar todos') return;
+                const cacheKey = `clientes_${vendedor}`;
+                let cachedData = clientCache.get(cacheKey);
+                if (cachedData) { this.ui.populateSelect(this.ui.elements.clienteSelect, cachedData, 'Seleccione un cliente'); return; }
+                this.ui.toggleLoading(true);
+                try {
+                    const options = await this.runGoogleScript('cargarClientesEnPregunta1', sessionToken, vendedor);
+                    clientCache.set(cacheKey, options);
+                    this.ui.populateSelect(this.ui.elements.clienteSelect, options, 'Seleccione un cliente');
+                } catch (error) { this.ui.showNotification(`Error al cargar clientes: ${error.message}`, 'error');
+                } finally { this.ui.toggleLoading(false); }
+            }
+            async loadFacturas() {
+                const cliente = this.ui.elements.clienteSelect.value;
+                const vendedor = this.ui.elements.vendedorSelect.value;
+                this.ui.elements.facturaSelect.disabled = true;
+                this.ui.clearResumen();
+                if (!cliente || !vendedor) return;
+                const cacheKey = `facturas_${vendedor}_${cliente}`;
+                let cachedData = clientCache.get(cacheKey);
+                if (cachedData) { this.facturasPendientes = cachedData; this.populateFacturasSelect(); return; }
+                this.ui.toggleLoading(true);
+                try {
+                    const facturas = await this.runGoogleScript('obtenerFacturas', sessionToken, vendedor, cliente);
+                    clientCache.set(cacheKey, facturas);
+                    this.facturasPendientes = facturas;
+                    this.populateFacturasSelect();
+                } catch (error) { this.ui.showNotification(`Error al cargar facturas: ${error.message}`, 'error');
+                } finally { this.ui.toggleLoading(false); }
+            }
+            populateFacturasSelect() {
+                const select = this.ui.elements.facturaSelect;
+                if (this.facturasPendientes.length === 0) {
+                    select.innerHTML = '<option disabled>No hay facturas pendientes</option>';
+                    select.disabled = true;
+                    return;
+                }
+                select.innerHTML = this.facturasPendientes.map(f =>
+                    `<option value="${f.documento}">${f.documento} — ${Number(f.mon_sal).toFixed(2)} ${f.cod_mon}</option>`
+                ).join('');
+                select.disabled = false;
+                select.size = Math.min(Math.max(this.facturasPendientes.length, 4), 10);
+            }
+            updateFacturaSelectionSummary() {
+                const selectedOptions = Array.from(this.ui.elements.facturaSelect.selectedOptions);
+                const selectedDocs = selectedOptions.map(o => o.value);
+                if (selectedDocs.length === 0) {
+                    this.ui.clearResumen();
+                    return;
+                }
+                let totalUsd = 0;
+                selectedDocs.forEach(doc => {
+                    const f = this.facturasPendientes.find(x => x.documento === doc);
+                    if (!f) return;
+                    let monto = Number(f.mon_sal) || 0;
+                    if (f.cod_mon && f.cod_mon.toUpperCase() !== 'USD' && this.bcvRate > 0) {
+                        monto = monto / this.bcvRate;
+                    }
+                    totalUsd += monto;
+                });
+                const totalBs = this.bcvRate > 0 ? totalUsd * this.bcvRate : 0;
+                this.ui.updateResumen({
+                    count: selectedDocs.length,
+                    totalUsd,
+                    totalBs,
+                    docs: selectedDocs
+                });
+            }
+            async loadBcvRate(forceRefresh = false) {
+                const cacheKey = 'bcvRate';
+                if (!forceRefresh && clientCache.get(cacheKey)) { 
+                    this.bcvRate = clientCache.get(cacheKey);
+                    this.ui.updateBcvRate(this.bcvRate); 
+                    return; 
+                }
+                try {
+                    const rate = await this.runGoogleScript('obtenerTasaBCV', sessionToken);
+                    this.bcvRate = rate;
+                    clientCache.set(cacheKey, rate);
+                    this.ui.updateBcvRate(rate);
+                } catch (error) { 
+                    this.bcvRate = null;
+                    this.ui.updateBcvRate(null); 
+                }
+            }
+            async loadRecords(vendedor = this.currentVendedor, forceRefresh = false) {
+                const cacheKey = `records_${vendedor || 'all'}`;
+                if (!forceRefresh && clientCache.get(cacheKey)) { this.ui.updateRecordsTable(clientCache.get(cacheKey)); return; }
+                this.ui.elements.recordsStatus.style.display = 'block';
+                this.ui.elements.recordsStatus.textContent = 'Cargando registros...';
+                try {
+                    const registros = await this.runGoogleScript('obtenerRegistrosEnviados', sessionToken, vendedor);
+                    clientCache.set(cacheKey, registros);
+                    this.ui.updateRecordsTable(registros);
+                } catch (error) { this.ui.elements.recordsStatus.textContent = 'Error al cargar registros.'; }
+            }
+            validarFormulario() {
+                let ok = true;
+                document.querySelectorAll('.error').forEach(e => e.style.display = 'none');
+                const fields = [
+                    { id: 'vendedor', err: 'vendedorError' },
+                    { id: 'cliente', err: 'clienteError' },
+                    { id: 'monto-pagado', err: 'montoError', condition: v => !v || +v <= 0 },
+                    { id: 'forma-pago', err: 'formaPagoError' },
+                    { id: 'banco_emisor', err: 'bancoEmisorError' },
+                    { id: 'banco_receptor', err: 'bancoReceptorError' },
+                    { id: 'nro-referencia', err: 'referenciaError', condition: v => v.length < 4 || v.length > 20 },
+                    { id: 'tipo-cobro', err: 'tipoCobroError' },
+                    { id: 'fecha-transferencia-pago', err: 'fechaError', condition: v => !v || new Date(v) > new Date() }
+                ];
+                fields.forEach(f => {
+                    const el = document.getElementById(f.id);
+                    if (!el || !el.value || (f.condition && f.condition(el.value))) {
+                        document.getElementById(f.err).style.display = 'block';
+                        ok = false;
+                    }
+                });
+                if (this.ui.elements.facturaSelect.selectedOptions.length === 0) {
+                    document.getElementById('facturaError').style.display = 'block';
+                    ok = false;
+                }
+                return ok;
+            }
+            async submitForm() {
+                if (!this.validarFormulario()) {
+                    this.ui.showNotification('Corrija los errores.', 'error');
+                    return;
+                }
+                const csv = Array.from(this.ui.elements.facturaSelect.selectedOptions).map(o => o.value.trim()).filter(Boolean).join(',');
+                const formData = new FormData(this.ui.elements.form);
+                const data = Object.fromEntries(formData.entries());
+                data.factura = csv;
+                data.nombreCliente = this.ui.elements.clienteSelect.options[this.ui.elements.clienteSelect.selectedIndex]?.text || '';
+                
+                const vendedorSeleccionado = this.ui.elements.vendedorSelect.value;
+                const clienteSeleccionado = this.ui.elements.clienteSelect.value;
+
+                this.ui.toggleLoading(true);
+                try {
+                    const resp = await this.runGoogleScript('enviarDatos', sessionToken, data);
+                    this.ui.showNotification(resp, 'success');
+                    this.ui.resetForm(true); // Mantiene el vendedor
+                    
+                    if(vendedorSeleccionado) {
+                        this.ui.elements.vendedorSelect.value = vendedorSeleccionado;
+                        await this.loadClientes(); // Recarga la lista de clientes
+                        if (clienteSeleccionado) {
+                            this.ui.elements.clienteSelect.value = clienteSeleccionado;
+                            await this.loadFacturas(); // Recarga las facturas para el mismo cliente
+                        }
+                    }
+
+                    await this.loadRecords(this.currentVendedor, true);
+                } catch (e) {
+                    this.ui.showNotification('Error: ' + e.message, 'error');
+                } finally {
+                    this.ui.toggleLoading(false);
+                }
+            }
+            async deleteRecord() {
+                this.ui.hideDeleteModal();
+                if (!this.registroToDelete) return;
+                this.ui.toggleLoading(true);
+                try {
+                    const resp = await this.runGoogleScript('eliminarRegistro', sessionToken, this.registroToDelete);
+                    this.ui.showNotification(resp, 'success');
+                    await this.loadRecords(this.currentVendedor, true);
+                } catch (e) {
+                    this.ui.showNotification('Error: ' + e.message, 'error');
+                } finally {
+                    this.ui.toggleLoading(false);
+                }
+            }
+            setRegistroToDelete(rowIndex) { this.registroToDelete = rowIndex; }
+            runGoogleScript(funcName, ...args) {
+                return new Promise((resolve, reject) => {
+                    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[funcName](...args);
+                });
+            }
+        }
+
+        const uiManager = new UiManager();
+        const dataManager = new DataManager(uiManager);
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const isNew = new URLSearchParams(window.location.search).get('new_session') === 'true';
+            dataManager.loadInitialData(isNew);
+
+            uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.loadClientes());
+            uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());
+            uiManager.elements.facturaSelect.addEventListener('change', () => dataManager.updateFacturaSelectionSummary());
+            uiManager.elements.form.addEventListener('submit', e => { e.preventDefault(); dataManager.submitForm(); });
+            uiManager.elements.recordsTableBody.addEventListener('click', e => { const btn = e.target.closest('.ghost-delete'); if (btn) { dataManager.setRegistroToDelete(btn.dataset.rowIndex); uiManager.showDeleteModal(); } });
+            uiManager.elements.confirmDeleteBtn.addEventListener('click', () => dataManager.deleteRecord());
+            uiManager.elements.cancelDeleteBtn.addEventListener('click', () => uiManager.hideDeleteModal());
+            window.addEventListener('click', e => { if (e.target === uiManager.elements.deleteModal) uiManager.hideDeleteModal(); });
+
+            document.getElementById('refresh-data-btn').addEventListener('click', () => {
+                dataManager.loadInitialData(true);
+                uiManager.showNotification('Datos refrescados.', 'success');
+            });
+
+            uiManager.elements.logoutButton.addEventListener('click', async () => {
+                uiManager.elements.logoutButton.disabled = true;
+                uiManager.elements.logoutButton.textContent = 'Cerrando...';
+                const tokenToInvalidate = localStorage.getItem('sessionToken') || sessionToken;
+                try {
+                    await dataManager.runGoogleScript('logoutUser', tokenToInvalidate);
+                } catch (error) {
+                    uiManager.showNotification(`Aviso: logout parcial (${error.message})`, 'error');
+                } finally {
+                    localStorage.removeItem('sessionToken');
+                    clientCache.clear();
+                    window.top.location.href = webAppUrl;
+                }
+            });
+
+            const downloadBtn = document.getElementById('download-pdf-btn');
+            downloadBtn.addEventListener('click', async () => {
+                uiManager.toggleLoading(true);
+                downloadBtn.disabled = true;
+                try {
+                    const vendedorFiltro = uiManager.elements.vendedorSelect.value || null;
+                    const res = await dataManager.runGoogleScript('descargarRegistrosPDF', sessionToken, vendedorFiltro);
+                    const byteCharacters = atob(res.base64);
+                    const byteNumbers = new Array(byteCharacters.length);
+                    for (let i = 0; i < byteCharacters.length; i++) byteNumbers[i] = byteCharacters.charCodeAt(i);
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: 'application/pdf' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = res.filename || 'Registros.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    setTimeout(() => URL.revokeObjectURL(url), 1500);
+                    uiManager.showNotification('PDF generado con éxito.');
+                } catch (e) {
+                    uiManager.showNotification('Error generando PDF: ' + e.message, 'error');
+                } finally {
+                    downloadBtn.disabled = false;
+                    uiManager.toggleLoading(false);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Dashboard de Analista</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    .container { max-width: 1000px; margin-top: 20px; }
+    .valido { color: green; }
+    .pendiente { color: orange; }
+    .invalido { color: red; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Dashboard de Analista</h2>
+    <div class="mb-3">
+      <label for="statusFilter" class="form-label">Filtrar por Estado</label>
+      <select id="statusFilter" class="form-select">
+        <option value="">Todos</option>
+        <option value="PENDIENTE">Pendiente</option>
+        <option value="PROCESADO">Procesado</option>
+        <option value="VALIDO">Válido</option>
+      </select>
+    </div>
+    <button class="btn btn-primary mb-3" onclick="exportData()">Exportar Datos</button>
+    <canvas id="paymentChart" class="mb-4"></canvas>
+    <table id="analystTable" class="table table-striped">
+      <thead>
+        <tr><th>Fecha</th><th>Vendedor</th><th>Referencia</th><th>Monto</th><th>Estado</th><th>Acción</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="spinner" class="spinner-border d-none" role="status"></div>
+  </div>
+  <script>
+    function showSpinner() { document.getElementById('spinner').classList.remove('d-none'); }
+    function hideSpinner() { document.getElementById('spinner').classList.add('d-none'); }
+    function showError(error) {
+      hideSpinner();
+      alert('Error: ' + error.message);
+    }
+
+    function updateRecordsTable(data) {
+      const tbody = document.getElementById('analystTable').getElementsByTagName('tbody')[0];
+      tbody.innerHTML = '';
+      data.forEach(row => {
+        const tr = tbody.insertRow();
+        tr.innerHTML = `<td>${row.fecha}</td><td>${row.vendedor}</td><td>${row.referencia}</td><td>${row.monto}</td><td class="${row.estadoPago.toLowerCase()}">${row.estadoPago}</td><td><button class="btn btn-sm btn-primary" onclick="processInEfactory('${row.referencia}')">Procesar</button></td>`;
+      });
+    }
+
+    function updateChart(data) {
+      const aggregated = {};
+      data.forEach(row => {
+        aggregated[row.vendedor] = (aggregated[row.vendedor] || 0) + row.monto;
+      });
+      new Chart(document.getElementById('paymentChart'), {
+        type: 'bar',
+        data: {
+          labels: Object.keys(aggregated),
+          datasets: [{ label: 'Monto Pagado', data: Object.values(aggregated), backgroundColor: '#2563eb' }]
+        }
+      });
+    }
+
+    function loadRecords(status = null) {
+      showSpinner();
+      google.script.run
+        .withSuccessHandler(data => {
+          hideSpinner();
+          updateRecordsTable(data);
+          updateChart(data);
+        })
+        .withFailureHandler(showError)
+        .obtenerRegistrosEnviados(null, status);
+    }
+
+    function processInEfactory(reference) {
+      showSpinner();
+      google.script.run
+        .withSuccessHandler(() => {
+          hideSpinner();
+          alert('Procesado en eFactory');
+          loadRecords(document.getElementById('statusFilter').value);
+        })
+        .withFailureHandler(showError)
+        .processInEfactory(reference);
+    }
+
+    function exportData() {
+      showSpinner();
+      google.script.run
+        .withSuccessHandler(data => {
+          hideSpinner();
+          const blob = new Blob([data], { type: 'text/csv' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'export.csv';
+          a.click();
+        })
+        .withFailureHandler(showError)
+        .exportData('Respuestas');
+    }
+
+    document.getElementById('statusFilter').addEventListener('change', () => {
+      loadRecords(document.getElementById('statusFilter').value);
+    });
+
+    window.onload = () => loadRecords();
+  </script>
+</body>
+</html>
