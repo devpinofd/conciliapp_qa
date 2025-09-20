@@ -117,7 +117,8 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
       'Nro. de Referencia', 'Tipo de Cobro', 'Fecha de la Transferencia o Pago',
-      'Observaciones', 'Usuario Creador']
+      'Observaciones', 'Usuario Creador', 'EstadoRegistro', 'AnalistaAsignado', 
+      'FechaProcesado', 'ComentarioAnalista']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
   'Registros Eliminados': {
@@ -127,7 +128,8 @@ SheetManager.SHEET_CONFIG = {
       'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador']
   },
   'Usuarios': {
-    headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro']
+    headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro', 
+              'Rol', 'Empresa', 'Sucursal', 'GrupoVentas']
   }
 };
 
@@ -272,15 +274,6 @@ class CobranzaService {
     return Session.getActiveUser().getEmail();
   }
 
-  /**
-   * Normaliza una cadena CSV de facturas:
-   * - split por coma
-   * - trim de cada elemento
-   * - filtra elementos vacíos
-   * - join con coma sin espacios
-   * @param {string} value
-   * @return {string}
-   */
   _normalizeFacturaCsv(value) {
     if (!value) return '';
     return value
@@ -336,25 +329,15 @@ class CobranzaService {
   submitData(data, userEmail) {
     const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
 
-    // Normalización y validaciones mínimas
     const facturaCsvRaw = data.factura || data.documento || '';
     const facturaCsv = this._normalizeFacturaCsv(facturaCsvRaw);
-    if (!facturaCsv) {
-      throw new Error('Debe indicar al menos una factura.');
-    }
+    if (!facturaCsv) throw new Error('Debe indicar al menos una factura.');
     const montoNum = parseFloat(data.montoPagado);
-    if (isNaN(montoNum) || montoNum <= 0) {
-      throw new Error('Monto inválido.');
-    }
-    if (!data.vendedor) {
-      throw new Error('Vendedor requerido.');
-    }
-    if (!data.cliente) {
-      throw new Error('Código de cliente requerido.');
-    }
+    if (isNaN(montoNum) || montoNum <= 0) throw new Error('Monto inválido.');
+    if (!data.vendedor) throw new Error('Vendedor requerido.');
+    if (!data.cliente) throw new Error('Código de cliente requerido.');
 
-    // Lógica de particionamiento
-    const submissionDate = new Date(); // Fecha para determinar la partición (siempre la actual)
+    const fecha = new Date(data.fechaTransferenciaPago || Date.now());
     const record = {
         vendedorCodigo: data.vendedor,
         bancoReceptor: data.bancoReceptor,
@@ -364,11 +347,10 @@ class CobranzaService {
         vendedor: record.vendedorCodigo,
         banco: record.bancoReceptor
     };
-    const partitionName = getPartitionName(submissionDate, partitionOpts);
+    const partitionName = getPartitionName(fecha, partitionOpts);
     const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
     const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
 
-    // Validación de duplicidad de referencia (ahora en la partición correcta)
     let existingReferences = [];
     if (partitionSheet.getLastRow() > 1) {
       existingReferences = partitionSheet
@@ -380,13 +362,12 @@ class CobranzaService {
       throw new Error('El número de referencia ya existe en esta partición.');
     }
 
-    const facturaArray = facturaCsv.split(',');
     const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
 
     const row = [
-      submissionDate, // Usar la fecha de envío como timestamp principal
+      new Date(),
       nombreCompletoVendedor,
       data.cliente,
       data.nombreCliente,
@@ -399,11 +380,15 @@ class CobranzaService {
       data.tipoCobro,
       data.fechaTransferenciaPago,
       data.observaciones,
-      userEmail
+      userEmail,
+      'Pendiente', // EstadoRegistro
+      '',          // AnalistaAsignado
+      '',          // FechaProcesado
+      ''           // ComentarioAnalista
     ];
 
     partitionSheet.appendRow(row);
-    Logger.log(`Formulario enviado por ${userEmail} a la partición ${partitionName}. Facturas: ${facturaCsv} (total=${facturaArray.length})`);
+    Logger.log(`Formulario enviado por ${userEmail} a la partición ${partitionName}. Facturas: ${facturaCsv}`);
     return '¡Datos recibidos con éxito!';
   }
 
@@ -424,7 +409,7 @@ class CobranzaService {
       });
 
     let allRecords = [];
-    const RECORDS_TO_FETCH = this.REGISTROS_POR_PAGINA * 5; // Obtener un buffer mayor para filtrar
+    const RECORDS_TO_FETCH = this.REGISTROS_POR_PAGINA * 5; 
 
     for (const sheetName of partitionSheets) {
       if (allRecords.length >= RECORDS_TO_FETCH) break;
@@ -435,12 +420,11 @@ class CobranzaService {
       const recordsWithMeta = values.map((row, index) => ({
         data: row,
         sheetName: sheetName,
-        rowIndex: index + 2 // El índice real de la fila en su hoja
+        rowIndex: index + 2 
       }));
       allRecords.push(...recordsWithMeta);
     }
     
-    // Ordenar todos los registros por timestamp descendente
     allRecords.sort((a, b) => new Date(b.data[0]).getTime() - new Date(a.data[0]).getTime());
 
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
@@ -676,11 +660,11 @@ function sincronizarVendedoresDesdeApi() {
   const dataFetcher = new DataFetcher();
   const api = dataFetcher.api;
   const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
-  const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`;
+  const query = `SELECT	TRIM(v.correo) AS correo,TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, s.nom_suc FROM vendedores v join sucursales  s on s.cod_suc=v.cod_suc where v.status='A';`;
   const vendedores = api.fetchData(query);
   if (vendedores && vendedores.length > 0) {
     sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
-    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]);
+    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor, v.nom_suc]);
     sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
     Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`);
     return `Sincronización completada. ${vendedores.length} vendedores actualizados.`;

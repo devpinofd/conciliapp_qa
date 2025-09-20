@@ -496,9 +496,11 @@
                 records.forEach(record => {
                     const facturas = (record.factura || '').split(',').map(f => f.trim()).filter(Boolean).join(', ');
                     const tr = document.createElement('tr');
+                    const encodedRowIndex = record.rowIndex ? btoa(record.rowIndex) : '';
+
                     tr.innerHTML = `
                         <td data-label="Acciones">
-                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${record.rowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"></path></svg></button>` : ''}
+                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${encodedRowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>` : ''}
                         </td>
                         <td data-label="Fecha">${record.fechaEnvio || record.fecha}</td>
                         <td data-label="Vendedor">${record.vendedor}</td>
@@ -608,7 +610,12 @@
                 this.ui.elements.facturaSelect.disabled = true;
                 this.facturasPendientes = [];
                 this.ui.clearResumen();
-                if (!vendedor || vendedor === 'Mostrar todos') return;
+                if (!vendedor || vendedor === 'Mostrar todos') {
+                    this.ui.elements.clienteSelect.innerHTML = '<option value="" disabled selected>Seleccione un cliente</option>';
+                    this.ui.elements.facturaSelect.innerHTML = '';
+                    await this.loadRecords(vendedor, true);
+                    return;
+                };
                 const cacheKey = `clientes_${vendedor}`;
                 let cachedData = clientCache.get(cacheKey);
                 if (cachedData) { this.ui.populateSelect(this.ui.elements.clienteSelect, cachedData, 'Seleccione un cliente'); return; }
@@ -618,7 +625,10 @@
                     clientCache.set(cacheKey, options);
                     this.ui.populateSelect(this.ui.elements.clienteSelect, options, 'Seleccione un cliente');
                 } catch (error) { this.ui.showNotification(`Error al cargar clientes: ${error.message}`, 'error');
-                } finally { this.ui.toggleLoading(false); }
+                } finally { 
+                    await this.loadRecords(vendedor, true);
+                    this.ui.toggleLoading(false); 
+                }
             }
             async loadFacturas() {
                 const cliente = this.ui.elements.clienteSelect.value;
@@ -779,6 +789,7 @@
                     this.ui.showNotification('Error: ' + e.message, 'error');
                 } finally {
                     this.ui.toggleLoading(false);
+                    this.registroToDelete = null;
                 }
             }
             setRegistroToDelete(rowIndex) { this.registroToDelete = rowIndex; }
@@ -800,7 +811,19 @@
             uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());
             uiManager.elements.facturaSelect.addEventListener('change', () => dataManager.updateFacturaSelectionSummary());
             uiManager.elements.form.addEventListener('submit', e => { e.preventDefault(); dataManager.submitForm(); });
-            uiManager.elements.recordsTableBody.addEventListener('click', e => { const btn = e.target.closest('.ghost-delete'); if (btn) { dataManager.setRegistroToDelete(btn.dataset.rowIndex); uiManager.showDeleteModal(); } });
+            
+            uiManager.elements.recordsTableBody.addEventListener('click', e => { 
+                const btn = e.target.closest('.ghost-delete'); 
+                if (btn) {
+                    const encodedRowIndex = btn.dataset.rowIndex;
+                    if (encodedRowIndex) {
+                        const decodedRowIndex = atob(encodedRowIndex);
+                        dataManager.setRegistroToDelete(decodedRowIndex); 
+                        uiManager.showDeleteModal();
+                    }
+                }
+            });
+            
             uiManager.elements.confirmDeleteBtn.addEventListener('click', () => dataManager.deleteRecord());
             uiManager.elements.cancelDeleteBtn.addEventListener('click', () => uiManager.hideDeleteModal());
             window.addEventListener('click', e => { if (e.target === uiManager.elements.deleteModal) uiManager.hideDeleteModal(); });
