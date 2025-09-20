@@ -334,19 +334,7 @@ class CobranzaService {
   }
 
   submitData(data, userEmail) {
-    const sheet = SheetManager.getSheet('Respuestas');
-
-    // Validación de duplicidad de referencia
-    let existingReferences = [];
-    if (sheet.getLastRow() > 1) {
-      existingReferences = sheet
-        .getRange(2, 10, sheet.getLastRow() - 1, 1)
-        .getValues()
-        .flat();
-    }
-    if (existingReferences.includes(data.nroReferencia)) {
-      throw new Error('El número de referencia ya existe.');
-    }
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
 
     // Normalización y validaciones mínimas
     const facturaCsvRaw = data.factura || data.documento || '';
@@ -363,6 +351,33 @@ class CobranzaService {
     }
     if (!data.cliente) {
       throw new Error('Código de cliente requerido.');
+    }
+
+    // Lógica de particionamiento
+    const fecha = new Date(data.fechaTransferenciaPago || Date.now());
+    const record = {
+        vendedorCodigo: data.vendedor,
+        bancoReceptor: data.bancoReceptor,
+    };
+    const partitionOpts = {
+        type: decidePartitionType(record),
+        vendedor: record.vendedorCodigo,
+        banco: record.bancoReceptor
+    };
+    const partitionName = getPartitionName(fecha, partitionOpts);
+    const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
+    const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
+
+    // Validación de duplicidad de referencia (ahora en la partición correcta)
+    let existingReferences = [];
+    if (partitionSheet.getLastRow() > 1) {
+      existingReferences = partitionSheet
+        .getRange(2, 10, partitionSheet.getLastRow() - 1, 1)
+        .getValues()
+        .flat();
+    }
+    if (existingReferences.includes(data.nroReferencia)) {
+      throw new Error('El número de referencia ya existe en esta partición.');
     }
 
     const facturaArray = facturaCsv.split(',');
@@ -387,8 +402,8 @@ class CobranzaService {
       userEmail
     ];
 
-    sheet.appendRow(row);
-    Logger.log(`Formulario enviado por ${userEmail}. Facturas: ${facturaCsv} (total=${facturaArray.length})`);
+    partitionSheet.appendRow(row);
+    Logger.log(`Formulario enviado por ${userEmail} a la partición ${partitionName}. Facturas: ${facturaCsv} (total=${facturaArray.length})`);
     return '¡Datos recibidos con éxito!';
   }
 
@@ -690,4 +705,27 @@ function crearTriggerConservarPropiedades() {
     .atHour(1)
     .everyDays(1)
     .create();
+}
+
+/**
+ * Crea o actualiza el trigger para la rotación mensual de particiones.
+ * Se ejecutará el primer día de cada mes.
+ */
+function crearTriggerRotacionMensual() {
+  // Eliminar triggers antiguos para evitar duplicados
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'rotacionMensual_') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Crear el nuevo trigger
+  ScriptApp.newTrigger('rotacionMensual_')
+    .timeBased()
+    .onMonthDay(1)
+    .atHour(2) // Ejecutar a las 2 AM para evitar horas pico
+    .create();
+    
+  Logger.log('Trigger de rotación mensual creado/actualizado correctamente.');
 }

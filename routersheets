@@ -1,35 +1,37 @@
-# Propuesta: Minimizar lecturas de Sheets y Particionamiento lógico de datos (GAS)
+Propuesta: Minimizar lecturas de Sheets y Particionamiento lógico de datos (GAS)
 
 Objetivo
-- Reducir latencia y consumo de cuotas de Google Sheets.
-- Evitar leer “todo” y mover el peso de cómputo al momento de escritura y a caches rápidos.
-- Mantener consultas rápidas para “recientes” y escalables para históricos.
 
----
+Reducir latencia y consumo de cuotas de Google Sheets.
 
-## 1) Minimizar lecturas de Sheets
+Evitar leer “todo” y mover el peso de cómputo al momento de escritura y a cachés rápidos.
 
-### Principios
-- Leer solo lo necesario: columnas y filas estrictamente requeridas.
-- Preferir “últimos N” y rangos fijos en vez de recorrer toda la hoja.
-- Precalcular e indexar en la escritura (materializar vistas de consulta frecuente).
-- Cachear resultados y metadatos (última fila, índices) en CacheService.
+Mantener consultas rápidas para “recientes” y escalables para históricos.
 
-### Técnicas concretas
+1) Minimizar lecturas de Sheets
 
-1) Proyección de columnas (solo las necesarias)
-- Si solo vas a construir la tabla de registros, evita traer columnas no mostradas.
-```javascript
+Principios
+
+Leer solo lo necesario: columnas y filas estrictamente requeridas.
+
+Preferir “últimos N” y rangos fijos en vez de recorrer toda la hoja.
+
+Precalcular e indexar en la escritura (materializar vistas de consulta frecuente).
+
+Cachear resultados y metadatos (última fila, índices) en CacheService.
+
+Técnicas concretas
+
+Proyección de columnas (solo las necesarias)
+
 function readProjectedRange_(sheet, startRow, numRows) {
   // Ejemplo: columnas A:I (9 col), ajusta a tus cabeceras reales
   const lastCol = 9;
   return sheet.getRange(startRow, 1, numRows, lastCol).getValues();
 }
-```
 
-2) Ventana móvil de “últimos N”
-- Para “recientes” (por vendedor o global), traer únicamente los últimos N registros.
-```javascript
+Ventana móvil de “últimos N”
+
 function readLastN_(sheet, N) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
@@ -38,252 +40,264 @@ function readLastN_(sheet, N) {
   const numRows = lastRow - startRow + 1;
   return readProjectedRange_(sheet, startRow, numRows);
 }
-```
 
-3) Rango por fecha (si el log está ordenado por inserción)
-- Si guardas la fecha/hora en una columna, puedes usar una búsqueda binaria para delimitar filas por rango (requiere datos ordenados crecientemente por fecha).
-```javascript
+Rango por fecha (datos ordenados por inserción)
+
 function findRowBoundsByDate_(values, dateColIndex, from, to) {
-  // values: matriz sin header; dateColIndex base 0; from/to: Date
-  // Simplificado: lineal o binaria si garantizas orden. Aquí, lineal con corte temprano.
   const res = [];
-  for (let i = values.length - 1; i >= 0; i--) { // desde el final (más reciente)
+  for (let i = values.length - 1; i >= 0; i--) {
     const d = new Date(values[i][dateColIndex]);
     if (d >= from && d <= to) res.push(values[i]);
-    if (d < from) break; // corte temprano si está ordenado
+    if (d < from) break;
   }
   return res.reverse();
 }
-```
 
-4) Índices en memoria/caché (para búsquedas por vendedor/cliente)
-- Mantén un índice ligero `{ vendedor -> [rowPointers] }` con:
-  - hoja (partition), fila, fecha.
-  - Actualiza el índice al insertar un registro.
-  - Guárdalo en CacheService (y sombra en PropertiesService si quieres resiliencia).
-- Consultas rápidas: obtienes los punteros y luego haces lecturas directas solo a esas filas (ideal con `Sheets Advanced Service` batchGet si están en distintas hojas).
+Índices en memoria/caché
 
-5) Vistas materializadas “Últimos N por vendedor”
-- Mantener por vendedor una hoja “LN_{VEND}” con los últimos N registros, actualizada al escribir.
-- Consultar “recientes” solo leyendo desde esa hoja, que es pequeña y acotada.
+Mantén un índice ligero { vendedor → [rowPointers] } con hoja, fila y fecha.
 
-6) Lotes en una sola llamada
-- Cuando requieras múltiples rangos del mismo spreadsheet, usa una sola operación:
-  - Apps Script nativo: `getRangeList(['A2:I101', 'A205:I305']).getRanges().map(r => r.getValues())`
-  - Sheets Advanced Service: `Sheets.Spreadsheets.values.batchGet(...)` para varios rangos.
+Actualízalo al insertar un registro y guárdalo en CacheService (y sombra en PropertiesService).
 
-7) Evita `getDisplayValues()` salvo para UI
-- Usa `getValues()` (tipos nativos) y da formato en cliente/plantilla. Menos bytes y conversión.
+Para búsquedas por cliente o vendedor, obtén punteros y usa batchGet para leer solo esas filas.
 
-8) Metadata en caché
-- Cachea `lastRow`, mapeo de cabeceras (nombre -> índice), y nombres de pestañas/particiones.
-- Invalida/actualiza estos metadatos solo al escribir, no en cada lectura.
+Vistas materializadas “Últimos N por vendedor”
 
----
+Hoja LN_{VEND} que almacena los N registros más recientes.
 
-## 2) Particionamiento lógico de datos
+Actualízala en cada escritura; las consultas “recientes” leen solo esa hoja.
 
-### Estrategias de partición
+Lotes en una sola llamada
 
-- Por mes/año (recomendada para logs de cobranzas)
-  - Hojas: `REG_2025_09`, `REG_2025_10`, ...
-  - Ventajas: tamaño acotado por hoja; consultas a “recientes” quedan en la partición activa.
-  - Historias cruzadas (rango > 1 mes) se resuelven leyendo 1–3 hojas en la mayoría de casos.
+getRangeList(['A2:I101','A205:I305'])
+  .getRanges()
+  .map(r=>r.getValues());
 
-- Por vendedor (útil si hay alto tráfico por vendedor)
-  - Hojas: `V_001_2025_09`, `V_002_2025_09`, ...
-  - Ventajas: paraleliza lectura/escritura por vendedor y reduce contención.
-  - Complejidad: mayor cantidad de hojas; necesitas un router robusto.
+O con Sheets Advanced Service:
 
-- Híbrido (mes + vendedor)
-  - Para cargas muy altas. Evaluar solo si los volúmenes lo ameritan.
+Sheets.Spreadsheets.values.batchGet({...});
 
-### Router de particiones
+Evita getDisplayValues() salvo para UI
 
-- Función para resolver a qué hoja escribir/leer según fecha (y opcionalmente vendedor).
-- Crea la hoja si no existe (con cabecera estándar) y congela la fila de títulos.
+Usa getValues() y formatea en cliente/plantilla.
 
-```javascript
-function partitionSheetName_(date, vendedorCode) {
+Metadata en caché
+
+Cachea lastRow, mapeo de cabeceras y nombres de pestañas.
+
+Invalida o actualiza solo al escribir, no en cada lectura.
+
+2) Particionamiento lógico de datos
+
+Actualizado según la documentación más reciente de Google Apps Script, MDN y principios SOLID.
+
+Estrategias de partición
+
+Por mes/añoHojas REG_YYYY_MM (por ejemplo, REG_2025_09). Tamaño acotado; consultas “recientes” en la partición activa. Rango > 1 mes → 1–3 hojas.
+
+Por vendedorHojas V_<CÓDIGO>_YYYY_MM (por ejemplo, V_001_2025_09). Paraleliza operaciones; reduce contención.
+
+Por banco receptorHojas B_<BANCO>_YYYY_MM (por ejemplo, B_Banesco_2025_09). Facilita la conciliación bancaria al agrupar pagos por receptor.
+
+Híbrido (mes + vendedor)Hojas V_<CÓDIGO>_YYYY_MM. Útil si el volumen mensual por vendedor supera umbrales de Sheets. Extensible a “mes + banco” o “mes + vendedor + banco”.
+
+Cada estrategia aplica SOLID:
+
+Single Responsibility: funciones dedicadas a calcular nombres o crear hojas.
+
+Open/Closed: nuevas particiones extienden el router sin modificarlo.
+
+Liskov Substitution: cada estrategia actúa como una “strategy” intercambiable.
+
+Interface Segregation: separación de lógica de partición y lógica de lectura/escritura.
+
+Dependency Inversion: el módulo principal depende de la abstracción getPartitionName.
+
+Router de particiones
+
+/**
+ * Devuelve el nombre de la partición según estrategia.
+ * @param {Date} date
+ * @param {Object} opts { type: 'mes'|'vendedor'|'banco'|'hibrido', vendedor?, banco? }
+ */
+function getPartitionName(date, { type, vendedor, banco }) {
   const yyyy = date.getFullYear();
-  const mm = String(date.getMonth() + 1).padStart(2, '0');
-  // Variante por mes
-  return `REG_${yyyy}_${mm}`;
-  // Variante híbrida:
-  // return `V_${vendedorCode}_${yyyy}_${mm}`;
+  const mm   = String(date.getMonth() + 1).padStart(2,'0');
+  switch (type) {
+    case 'mes':
+      return `REG_${yyyy}_${mm}`;
+    case 'vendedor':
+      return `V_${vendedor}_${yyyy}_${mm}`;
+    case 'banco':
+      return `B_${banco}_${yyyy}_${mm}`;
+    case 'hibrido':
+      return `V_${vendedor}_${yyyy}_${mm}`;
+    default:
+      throw new Error(`Tipo desconocido: ${type}`);
+  }
 }
 
-function ensurePartitionSheet_(ss, name, header) {
+function ensurePartitionSheet(ss, name, header) {
   let sh = ss.getSheetByName(name);
   if (!sh) {
     sh = ss.insertSheet(name);
-    sh.getRange(1, 1, 1, header.length).setValues([header]);
+    sh.getRange(1,1,1,header.length).setValues([header]);
     sh.setFrozenRows(1);
   }
   return sh;
 }
-```
 
-### Escrituras con actualización de vistas/índices
+Escrituras con actualización de partición e índices
 
-- Al insertar un registro:
-  1) Determina partición (por fecha y, si aplica, vendedor).
-  2) Inserta en la hoja de partición.
-  3) Actualiza:
-     - Hoja “LN_{VEND}” (últimos N del vendedor).
-     - Hoja “LN_ALL” (últimos N global).
-     - Índice `IDX` (fila, hoja, vendedor, fecha).
-  4) Invalida o actualiza entradas de caché relacionadas.
-
-```javascript
-function appendRegistro_(ss, record, header) {
-  const date = new Date(record.fechaEnvio || new Date());
-  const vend = record.vendedorCodigo || record.vendedor;
-  const sheetName = partitionSheetName_(date /*, vend */);
-  const sh = ensurePartitionSheet_(ss, sheetName, header);
+/**
+ * Inserta un registro y actualiza índices y vistas.
+ * @param {Spreadsheet} ss
+ * @param {Object} record { fechaEnvio, vendedorCodigo, bancoReceptor, … }
+ * @param {string[]} header
+ */
+function appendRegistro(ss, record, header) {
+  const fecha = new Date(record.fechaEnvio || Date.now());
+  const opts  = {
+    type:     decidePartitionType(record), // 'mes'|'vendedor'|'banco'|'hibrido'
+    vendedor: record.vendedorCodigo,
+    banco:    record.bancoReceptor
+  };
+  const name = getPartitionName(fecha, opts);
+  const sh   = ensurePartitionSheet(ss, name, header);
 
   const row = header.map(h => record[h] ?? '');
   sh.appendRow(row);
 
-  // Actualizar vistas materializadas
-  updateUltimosNPorVendedor_(ss, vend, row, header, 100); // N = 100
-  updateUltimosNGlobal_(ss, row, header, 100);
-
-  // Actualizar índice (hoja IDX)
-  updateIndex_(ss, { hoja: sheetName, fila: sh.getLastRow(), vendedor: vend, fecha: date });
-
-  // Invalidar/actualizar cachés clave
-  // CacheService: script:registros:user:{email}:page=1, script:registros:all:page=1, etc.
+  updateIndex(ss, {
+    hoja:    name,
+    fila:    sh.getLastRow(),
+    fecha,
+    vendedor: record.vendedorCodigo,
+    banco:    record.bancoReceptor
+  });
+  updateUltimosNGlobal(ss, row, header, 100);
+  updateUltimosNPorVendedor(ss, record.vendedorCodigo, row, header, 100);
 }
-```
 
-### Consulta de históricos
+decidePartitionType es un módulo independiente que elige la estrategia según volúmenes y contexto.
 
-- Por rango de fechas:
-  1) Determina las particiones afectadas (p. ej., mes actual y anterior).
-  2) Lee solo esas hojas y aplica filtro por fecha/vendedor en memoria (los datasets ya son más acotados).
-- Por vendedor:
-  - Primero intenta “LN_{VEND}” (si el rango solicitado cabe).
-  - Si no, cae a las particiones relevantes.
+La secuencia garantiza consistencia atómica en índices y vistas.
 
----
+3) Índices y Vistas materializadas
 
-## 3) Índices y Vistas materializadas
+Índice (hoja IDX)
 
-### Índice (hoja `IDX`)
-- Columnas sugeridas: `hoja`, `fila`, `fechaISO`, `vendedor`, `cliente`, `factura`, `monto`
-- Al escribir, append en `IDX`.
-- Búsquedas rápidas:
-  - Filtra `IDX` por vendedor y rango de fechas para obtener punteros (hoja/fila).
-  - Lee filas exactas con `getRangeList` para minimizar lecturas.
+Columnas: hoja, fila, fechaISO, vendedor, cliente, factura, monto.
 
-```javascript
-function updateIndex_(ss, idxRow) {
-  const sh = ensurePartitionSheet_(ss, 'IDX', ['hoja','fila','fechaISO','vendedor','cliente','factura','monto']);
+Al escribir, appendRow en IDX.
+
+Para búsquedas, filtra IDX por vendedor y rango de fechas, luego usa getRangeList para leer filas exactas.
+
+function updateIndex(ss, idxRow) {
+  const sh = ensurePartitionSheet(
+    ss,
+    'IDX',
+    ['hoja','fila','fechaISO','vendedor','cliente','factura','monto']
+  );
   sh.appendRow([
     idxRow.hoja,
     idxRow.fila,
-    new Date(idxRow.fecha).toISOString().slice(0,10),
-    idxRow.vendedor || '',
+    idxRow.fecha.toISOString().slice(0,10),
+    idxRow.vendedor||'',
     idxRow.cliente || '',
     idxRow.factura || '',
-    idxRow.monto || ''
+    idxRow.monto   || ''
   ]);
 }
-```
 
-### Vistas materializadas “LN” (últimos N)
-- `LN_ALL`: últimos N globales
-- `LN_{VEND}`: últimos N por vendedor
-- Mantener tamaño acotado (sobrescribir cuando excede N).
-- Consultas de “recientes” usan estas vistas, no la tabla grande.
+Vistas “LN” (últimos N)
 
-```javascript
-function updateUltimosNPorVendedor_(ss, vend, row, header, N) {
+LN_ALL: últimos N globales.
+
+LN_{VEND}: últimos N por vendedor.
+
+Al exceder N, elimina filas antiguas.
+
+function updateUltimosNPorVendedor(ss, vend, row, header, N) {
   const name = `LN_${vend}`;
-  const sh = ensurePartitionSheet_(ss, name, header);
+  const sh   = ensurePartitionSheet(ss, name, header);
   sh.appendRow(row);
-  // Recortar si excede
-  const lastRow = sh.getLastRow();
-  const headerRow = 1;
-  const dataRows = lastRow - headerRow;
+  const lastRow  = sh.getLastRow();
+  const dataRows = lastRow - 1;
   if (dataRows > N) {
-    const toDelete = dataRows - N;
-    sh.deleteRows(headerRow + 1, toDelete);
+    sh.deleteRows(2, dataRows - N);
   }
 }
-```
 
----
+4) Triggers de mantenimiento
 
-## 4) Triggers de mantenimiento
+Rotación mensualCrea la partición de mes nuevo con cabecera.
 
-- Rotación mensual
-  - A inicios de mes, crea la partición del mes con cabecera.
-  - Opcional: mover las últimas X filas del mes anterior a la vista `LN_ALL` si aplica.
+Compactación de vistas LNGarantiza que cada LN_* no exceda N.
 
-- Compactación de vistas LN
-  - Asegurar que `LN_*` no excedan N.
+Precalentamiento de cachésRecalcula cachés “recientes” e índices a primera hora.
 
-- Precalentamiento de cachés (+ índices)
-  - Recalcular cachés “recientes” (all y top vendedores) a primera hora.
-
-```javascript
 function rotacionMensual_() {
-  const ss = SpreadsheetApp.getActive();
-  const now = new Date();
-  const name = partitionSheetName_(now /*, null */);
-  ensurePartitionSheet_(ss, name, getHeader_());
+  const ss   = SpreadsheetApp.getActive();
+  const now  = new Date();
+  const name = getPartitionName(now, {type:'mes'});
+  ensurePartitionSheet(ss, name, getHeader_());
 }
-```
 
----
+5) Plan de migración
 
-## 5) Plan de migración
+Definir cabecera estándar.
 
-1) Definir cabecera estándar (orden y nombres de columnas).
-2) Implementar router de particiones (por mes).
-3) Redirigir la escritura de nuevos registros a la partición activa.
-4) Crear y poblar `LN_ALL` y `LN_{VEND}` al vuelo con cada inserción.
-5) Adaptar lectura de “recientes” para usar `LN_*`.
-6) Implementar consultas por rango: resolver particiones afectadas y leer solo esas hojas.
-7) Opcional: retro-migrar históricos a hojas por mes (script de una sola vez).
-8) Añadir triggers de rotación mensual y precalentamiento de cachés.
-9) Métricas de tiempo de respuesta y lecturas/llamadas (ajustar N y TTL según uso).
+Implementar router de particiones.
 
----
+Redirigir escrituras a la partición activa.
 
-## 6) Riesgos y mitigaciones
+Crear y poblar LN_ALL y LN_{VEND} al vuelo.
 
-- Complejidad de consultas跨-partición:
-  - Mitigar con índice `IDX` y/o limitar rangos de fechas en UI.
-- Consistencia de vistas LN:
-  - Actualizar atómicamente tras escribir (LockService si hay alta concurrencia).
-- Límite de hojas:
-  - Años de operación → muchas hojas; evaluar particionar por archivo a partir de cierto umbral (p.ej. un spreadsheet por año).
+Adaptar lectura de “recientes” para usar LN_*.
 
----
+Implementar consulta por rango: resolver particiones y leer sólo esas hojas.
 
-## 7) Métricas y validación
+Retro-migrar históricos a hojas mensuales (script único).
 
-- Medir tiempo de:
-  - Escritura + actualización de LN/IDX.
-  - Lectura de “recientes” y de rango típico.
-- Contar lecturas a Sheets por endpoint (antes/después).
-- Ajustar N (últimos) y columnas proyectadas según patrones de uso.
+Agregar triggers de rotación mensual y precalentamiento.
 
----
+Medir tiempos de respuesta y lecturas; ajustar N y TTL.
 
-## 8) Checklist de adopción
+6) Riesgos y mitigaciones
 
-- [ ] Router de particiones (por mes).
-- [ ] Escritura en partición + actualización de LN_ALL y LN_{VEND}.
-- [ ] Consulta “recientes” desde LN_*.
-- [ ] Consulta por rango leyendo solo particiones afectadas.
-- [ ] Índice `IDX` (opcional, recomendado si se requieren búsquedas combinadas).
-- [ ] Triggers: rotación mensual, compactación LN, precalentamiento de cachés.
-- [ ] Métricas básicas de rendimiento.
+Complejidad de consultas跨-particiónMitigar con índice IDX y límites de fechas en UI.
 
----
+Consistencia de vistas LNUsar LockService para actualizaciones atómicas si hay alta concurrencia.
 
-Con estas prácticas, las lecturas se vuelven acotadas y predecibles, evitando escanear hojas completas. El particionamiento por mes y las vistas materializadas permiten mantener una experiencia fluida, incluso con crecimiento sostenido de datos.
+Límite de hojasEvaluar particionar por archivo tras cierto umbral (por ejemplo, un spreadsheet por año).
+
+7) Métricas y validación
+
+Medir tiempos de
+
+Escritura + actualización de LN/IDX.
+
+Lectura de “recientes” y rangos típicos.
+
+Contar lecturas de Sheets por endpoint (antes/después).
+
+Ajustar N y columnas proyectadas según patrones de uso.
+
+8) Checklist de adopción
+
+[ ] Router de particiones (mes, vendedor, banco, híbrido).
+
+[ ] Escritura en partición + actualización de LN_ALL y LN_{VEND}.
+
+[ ] Consulta “recientes” desde LN_*.
+
+[ ] Consulta por rango leyendo sólo particiones afectadas.
+
+[ ] Índice IDX implementado para búsquedas combinadas.
+
+[ ] Triggers: rotación mensual, compactación LN, precalentamiento de cachés.
+
+[ ] Métricas básicas de rendimiento recopiladas.
+
+Con estas prácticas, las lecturas son acotadas y predecibles. El particionamiento por mes, vendedor, banco receptor e híbrido, junto con vistas materializadas y un router flexible, garantiza escalabilidad y agilidad incluso con crecimiento sostenido de datos.
