@@ -5,34 +5,24 @@
  */
 
 /**
- * Decide el tipo de partición a utilizar basado en el registro.
- * Esta es una implementación de ejemplo; la lógica real puede ser más compleja.
+ * Decide el tipo de partición a utilizar.
+ * Modificado para forzar siempre la partición por vendedor.
  * @param {Object} record El registro de datos.
- * @returns {string} El tipo de partición ('mes', 'vendedor', 'banco').
+ * @returns {string} Siempre devuelve 'vendedor'.
  */
 function decidePartitionType(record) {
-  const hasVendedor = !!record.vendedorCodigo;
-  const hasBanco = !!record.bancoReceptor;
-
-  if (hasVendedor && hasBanco) {
-    return 'hibrido';
-  }
-  if (hasVendedor) {
-    return 'vendedor';
-  }
-  if (hasBanco) {
-    return 'banco';
-  }
-  return 'mes';
+  // Se fuerza a que la partición sea siempre por vendedor.
+  // Las otras lógicas (banco, híbrido, mes) ya no se usarán.
+  return 'vendedor';
 }
 
 /**
  * Devuelve el nombre de la partición según la estrategia y los datos proporcionados.
  * @param {Date} date La fecha para la partición.
  * @param {Object} opts Opciones que incluyen el tipo y datos adicionales.
- * @param {string} opts.type Estrategia de partición: 'mes', 'vendedor', 'banco', 'hibrido'.
+ * @param {string} opts.type Estrategia de partición (ahora siempre 'vendedor').
  * @param {string} [opts.vendedor] Código del vendedor.
- * @param {string} [opts.banco] Nombre del banco receptor.
+ * @param {string} [opts.banco] Nombre del banco receptor (ya no se usa para el nombre).
  * @returns {string} El nombre de la hoja de partición.
  * @throws {Error} Si el tipo de partición es desconocido.
  */
@@ -41,21 +31,24 @@ function getPartitionName(date, { type, vendedor, banco }) {
   const monthNames = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
   const mm = monthNames[date.getMonth()];
 
-  // Truncar el nombre del banco antes del primer guion, si existe.
-  const bancoLabel = banco ? banco.split('-')[0].trim() : '';
+  // La lógica ahora se centra solo en el tipo 'vendedor'.
+  // Se usa 'SIN_VENDEDOR' como fallback si el código no está presente.
+  const vendedorCodigo = vendedor || 'SIN_VENDED_ASIGNADO';
 
   switch (type) {
+    case 'vendedor':
+      return `V_${vendedorCodigo}_${yyyy}_${mm}`;
+    
+    // Los siguientes casos se mantienen como respaldo, pero no deberían ser llamados
+    // debido al cambio en decidePartitionType.
     case 'mes':
       return `REG_${yyyy}_${mm}`;
-    case 'vendedor':
-      if (!vendedor) throw new Error('El código de vendedor es requerido para la partición por vendedor.');
-      return `V_${vendedor}_${yyyy}_${mm}`;
     case 'banco':
-      if (!bancoLabel) throw new Error('El banco es requerido para la partición por banco.');
-      return `B_${bancoLabel}_${yyyy}_${mm}`;
+      if (!banco) throw new Error('El banco es requerido para la partición por banco.');
+      return `B_${banco}_${yyyy}_${mm}`;
     case 'hibrido':
-      if (!vendedor || !bancoLabel) throw new Error('Vendedor y banco son requeridos para la partición híbrida.');
-      return `V_${vendedor}_B_${bancoLabel}_${yyyy}_${mm}`;
+      if (!vendedor || !banco) throw new Error('Vendedor y banco son requeridos para la partición híbrida.');
+      return `V_${vendedor}_B_${banco}_${yyyy}_${mm}`;
     default:
       throw new Error(`Tipo de partición desconocido: ${type}`);
   }
@@ -90,7 +83,7 @@ function rotacionMensual_() {
   const now = new Date();
   const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
 
-  // Asegurar la partición del mes actual
+  // Asegurar la partición del mes actual (tipo mes como genérico)
   const currentMonthName = getPartitionName(now, {type:'mes'});
   ensurePartitionSheet(ss, currentMonthName, header);
 
