@@ -224,7 +224,7 @@ class DataFetcher {
       const data = this.api.fetchData(query);
       return data.map(row => ({
         nombre: String(row.Nombre).trim(),
-        codigo: String(row.Codigo_Cliente).trim()
+        codigo: String(row.CodCliente).trim()
       }));
     } catch (e) {
       Logger.error(`Error en fetchClientesFromApi: ${e.message}`, { query });
