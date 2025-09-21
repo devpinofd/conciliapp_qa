@@ -345,7 +345,7 @@ class CobranzaService {
         throw new Error(`No tiene vendedores asignados. Por favor, contacte al administrador.`);
       }
       let optionsHtml = isAdmin ? '<option value="Mostrar todos">Mostrar todos</option>' : '';
-      optionsHtml += vendedores.map(v => `<option value="${v.codigo}">${v.nombre} v.s ${v.sucursal}</option>`).join('');
+      optionsHtml += vendedores.map(v => `<option value="${v.codigo}">${v.nombre} </option>`).join('');
       return optionsHtml;
     };
     if (forceRefresh) {
@@ -360,8 +360,7 @@ class CobranzaService {
   getClientesHtml(codVendedor) {
     const clientes = CacheManager.get(`clientes_${codVendedor}`, 21600,
       () => this.dataFetcher.fetchClientesFromApi(codVendedor));
-// CORRECCIÓN: Mostrar la sucursal en el texto del cliente para claridad del usuario
-    return clientes.map(c => `<option value="${c.codigo}">${c.nombre} - ${c.sucursal || 'N/A'}</option>`).join('');
+    return clientes.map(c => `<option value="${c.codigo}">${c.nombre}</option>`).join('');
   }
 
   getFacturas(codVendedor, codCliente) {
@@ -854,11 +853,9 @@ function setApiQueries() {
       TRIM(cc.documento) AS documento,
       CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal,
       CAST(cc.fec_ini AS DATE) AS fec_ini,
-      'USD' AS cod_mon,
-      trim(s.nom_suc) AS sucursal
+      'USD' AS cod_mon
     FROM cuentas_cobrar cc
     JOIN clientes c ON c.cod_cli = cc.cod_cli
-    JOIN sucursales s ON s.cod_suc = cc.cod_suc
     WHERE cc.cod_tip = 'FACT' 
       AND cc.cod_cli = '{safeCodCliente}' 
       AND cc.cod_ven = '{safeCodVendedor}' 
@@ -872,17 +869,7 @@ function setApiQueries() {
    FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
 
-  const clientesQuery = `WITH clientes_filtrados AS (
-  SELECT cod_cli
-  FROM cuentas_cobrar
-  WHERE cod_tip = 'FACT'
-    AND cod_ven = '{codVendedor}' 
-  GROUP BY cod_cli
-)
-SELECT cf.cod_cli AS Codigo_Cliente,
-       c.nom_cli  AS Nombre
-FROM clientes_filtrados cf
-JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
+  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli   FROM cuentas_cobrar   WHERE cod_tip = 'FACT'     AND cod_ven = '{codVendedor}'   GROUP BY cod_cli ) SELECT cf.cod_cli AS CodCliente,       c.nom_cli  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
 
   const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
