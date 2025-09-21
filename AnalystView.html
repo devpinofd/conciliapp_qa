@@ -98,6 +98,17 @@
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
         const user = JSON.parse('<?= JSON.stringify(user) ?>');
 
+        // Secure navigation utility function
+        function secureNavigate(url) {
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.target = '_top';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+        }
+
         const ui = {
             notification: document.getElementById('notification'),
             loadingSpinner: document.getElementById('loading-spinner'),
@@ -217,7 +228,7 @@
         function setupEventListeners() {
             ui.logoutButton.addEventListener('click', () => {
                 localStorage.removeItem('sessionToken');
-                window.top.location.href = webAppUrl;
+                secureNavigate(webAppUrl);
             });
 
             ui.refreshBtn.addEventListener('click', loadRecords);
