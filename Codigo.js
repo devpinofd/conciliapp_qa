@@ -154,7 +154,7 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Fecha Eliminación', 'Usuario que Eliminó', 'Timestamp', 'Vendedor',
       'Codigo Cliente', 'Nombre Cliente', 'Factura', 'Monto Pagado',
       'Forma de Pago', 'Banco Emisor', 'Banco Receptor', 'Nro. de Referencia',
-      'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador']
+      'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador', 'Sucursal']
   },
   'Usuarios': {
     headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro']
@@ -172,14 +172,15 @@ class DataFetcher {
     const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return [];
-    const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
     const vendedoresFiltrados = data
       .map(row => ({
         email: String(row[0]).trim().toLowerCase(),
         nombre: String(row[1]).trim(),
-        codigo: String(row[2]).trim()
+        codigo: String(row[2]).trim(),
+        sucursal: String(row[3]).trim()
       }))
-      .filter(v => v.email === normalizedUserEmail && v.nombre && v.codigo);
+      .filter(v => v.email === normalizedUserEmail && v.nombre && v.codigo && v.sucursal);
     if (vendedoresFiltrados.length === 0) {
       Logger.log(`No se encontraron vendedores para el usuario: ${userEmail}`);
     }
@@ -189,11 +190,12 @@ class DataFetcher {
     const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return [];
-    const data = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
     return data.map(row => ({
       nombre: String(row[1]).trim(),
-      codigo: String(row[2]).trim()
-    })).filter(v => v.nombre && v.codigo);
+      codigo: String(row[2]).trim(),
+      sucursal: String(row[3]).trim()
+    })).filter(v => v.nombre && v.codigo && v.sucursal);
   }
   isUserAdmin(userEmail) {
     if (!userEmail) return false;
@@ -390,6 +392,7 @@ class CobranzaService {
     const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
+    const sucursal = vendedorEncontrado ? vendedorEncontrado.sucursal : '';
 
     const row = [
       submissionDate,
@@ -405,7 +408,11 @@ class CobranzaService {
       data.tipoCobro,
       data.fechaTransferenciaPago,
       data.observaciones,
-      userEmail
+      userEmail,
+      data.estadoAnalista || '',
+      data.comentarioAnalista || '',
+      data.analistaAsignado || '',
+      sucursal
     ];
 
     partitionSheet.appendRow(row);
@@ -752,11 +759,11 @@ function sincronizarVendedoresDesdeApi() {
   const dataFetcher = new DataFetcher();
   const api = dataFetcher.api;
   const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
-  const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`;
+  const query = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc where v.status='A';`;
   const vendedores = api.fetchData(query);
   if (vendedores && vendedores.length > 0) {
     sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
-    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]);
+    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor,v.sucursal]);
     sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
     Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`);
     return `Sincronización completada. ${vendedores.length} vendedores actualizados.`;
