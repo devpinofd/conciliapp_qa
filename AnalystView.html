@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Analista</title>
     <!-- Se reutilizan los mismos estilos de Index.html para consistencia visual -->
-    <?!= include('Styles'); ?>
+    <?!= include('styles'); ?>
     <style>
         /* Estilos específicos para la vista de analista */
         .status-badge {
@@ -134,7 +134,7 @@
                     : record['Monto Pagado'];
                 
                 const fecha = record.Timestamp ? new Date(record.Timestamp).toLocaleDateString('es-VE') : 'N/A';
-                const estadoClass = `status-${String(record.EstadoRegistro).toLowerCase()}`;
+                const estadoClass = `status-${String(record.EstadoRegistro || 'pendiente').toLowerCase()}`;
 
                 tr.innerHTML = `
                     <td data-label="ID">${record['ID Registro'] || 'N/A'}</td>
@@ -143,7 +143,7 @@
                     <td data-label="Cliente">${record['Nombre Cliente'] || 'N/A'}</td>
                     <td data-label="Monto">${monto}</td>
                     <td data-label="Sucursal">${record.Sucursal || 'N/A'}</td>
-                    <td data-label="Estado"><span class="status-badge ${estadoClass}">${record.EstadoRegistro || 'N/A'}</span></td>
+                    <td data-label="Estado"><span class="status-badge ${estadoClass}">${record.EstadoRegistro || 'Pendiente'}</span></td>
                     <td data-label="Acciones" class="action-buttons">
                         <button class="button button-primary btn-process" data-identifier='${record.recordIdentifier}'>Procesar</button>
                         <button class="button button-danger btn-reject" data-identifier='${record.recordIdentifier}'>Rechazar</button>
