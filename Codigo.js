@@ -253,7 +253,8 @@ class DataFetcher {
         documento: String(row.documento).trim(),
         mon_sal: parseFloat(row.mon_sal) || 0,
         fec_ini: row.fec_ini ? new Date(row.fec_ini).toISOString().split('T')[0] : '',
-        cod_mon: String(row.cod_mon).trim() || 'USD'
+        cod_mon: String(row.cod_mon).trim() || 'USD',
+        sucursal: String(row.sucursal || '').trim() // CORRECCIÓN: Capturar y devolver la sucursal
       }));
     } catch (e) {
       Logger.error(`Error en fetchFacturasFromApi: ${e.message}`, { query });
@@ -359,7 +360,8 @@ class CobranzaService {
   getClientesHtml(codVendedor) {
     const clientes = CacheManager.get(`clientes_${codVendedor}`, 21600,
       () => this.dataFetcher.fetchClientesFromApi(codVendedor));
-    return clientes.map(c => `<option value="${c.codigo}">${c.nombre}</option>`).join('');
+// CORRECCIÓN: Mostrar la sucursal en el texto del cliente para claridad del usuario
+    return clientes.map(c => `<option value="${c.codigo}">${c.nombre} - ${c.sucursal || 'N/A'}</option>`).join('');
   }
 
   getFacturas(codVendedor, codCliente) {
@@ -853,7 +855,7 @@ function setApiQueries() {
       CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal,
       CAST(cc.fec_ini AS DATE) AS fec_ini,
       'USD' AS cod_mon,
-      trim(s.nom_suc) AS sucursal,
+      trim(s.nom_suc) AS sucursal
     FROM cuentas_cobrar cc
     JOIN clientes c ON c.cod_cli = cc.cod_cli
     JOIN sucursales s ON s.cod_suc = cc.cod_suc
