@@ -143,6 +143,7 @@ SheetManager.SHEET_CONFIG = {
   'obtenerVendedoresPorUsuario': { headers: ['correo', 'vendedorcompleto', 'codvendedor'] },
   'Administradores': { headers: ['correo_admin'] },
   'Bancos': { headers: ['Nombre del Banco'] },
+  'analista': { headers: ['sucursal', 'codigousuario'] }, // NUEVA HOJA
   'Respuestas': {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
@@ -291,6 +292,29 @@ class DataFetcher {
       nombre: String(row[0]).trim(),
       codigo: String(row[0]).trim()
     })).filter(b => b.nombre && b.codigo);
+  }
+
+  /**
+   * NUEVA FUNCIÓN: Obtiene las sucursales por analista desde la API de eFactory.
+   * @returns {Array<Object>} Un array de objetos, cada uno con `sucursal` y `codigousuario`.
+   */
+  fetchSucursalesPorAnalistaFromApi() {
+    const props = PropertiesService.getScriptProperties();
+    const query = props.getProperty('SUCURSALES_USUARIOS_QUERY');
+    if (!query) {
+      Logger.error('La propiedad SUCURSALES_USUARIOS_QUERY no está definida.');
+      throw new Error('No se encontró la consulta para cargar sucursales por usuario.');
+    }
+    try {
+      const data = this.api.fetchData(query);
+      return data.map(row => ({
+        sucursal: String(row.sucursal || '').trim(),
+        codigousuario: String(row.codigousuario || '').trim()
+      }));
+    } catch (e) {
+      Logger.error(`Error en fetchSucursalesPorAnalistaFromApi: ${e.message}`, { query });
+      return [];
+    }
   }
 }
 
@@ -759,7 +783,7 @@ function sincronizarVendedoresDesdeApi() {
   const dataFetcher = new DataFetcher();
   const api = dataFetcher.api;
   const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
-  const query = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc where v.status='A';`;
+  const query = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOI[...]
   const vendedores = api.fetchData(query);
   if (vendedores && vendedores.length > 0) {
     sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
@@ -770,6 +794,35 @@ function sincronizarVendedoresDesdeApi() {
   } else {
     Logger.log('Sincronización de vendedores: No se encontraron registros.');
     return 'No se encontraron vendedores para sincronizar.';
+  }
+}
+
+/**
+ * NUEVA FUNCIÓN: Sincroniza las sucursales por analista desde la API a la hoja 'analista'.
+ * Se puede ejecutar manualmente desde el editor de Apps Script.
+ * @returns {string} Un mensaje con el resultado de la operación.
+ */
+function sincronizarSucursalesPorAnalista() {
+  const dataFetcher = new DataFetcher();
+  const sheet = SheetManager.getSheet('analista');
+  const sucursales = dataFetcher.fetchSucursalesPorAnalistaFromApi();
+  
+  if (sucursales && sucursales.length > 0) {
+    // Limpiar hoja antes de escribir nuevos datos (excepto encabezados)
+    if (sheet.getLastRow() > 1) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
+    }
+    
+    const values = sucursales.map(s => [s.sucursal, s.codigousuario]);
+    sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
+    
+    const message = `Sincronización de sucursales por analista completada. ${sucursales.length} registros actualizados.`;
+    Logger.log(message);
+    return message;
+  } else {
+    const message = 'Sincronización de sucursales por analista: No se encontraron registros para sincronizar.';
+    Logger.log(message);
+    return message;
   }
 }
 
@@ -790,8 +843,10 @@ function setApiQueries() {
       AND cc.mon_sal > 0
       ORDER BY cc.fec_ini DESC`;
   props.setProperty('FACTURAS_QUERY', facturasQuery);
-  const vendedoresQuery = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
+
+  const vendedoresQuery = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vended[...]
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
+
   const clientesQuery = `WITH clientes_filtrados AS (
   SELECT cod_cli
   FROM cuentas_cobrar
@@ -804,6 +859,10 @@ SELECT cf.cod_cli AS Codigo_Cliente,
 FROM clientes_filtrados cf
 JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
+
+  // NUEVA PROPIEDAD
+  const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
+  props.setProperty('SUCURSALES_USUARIOS_QUERY', sucursalesUsuariosQuery);
 }
 
 function conservarPrimerasPropiedades() {
