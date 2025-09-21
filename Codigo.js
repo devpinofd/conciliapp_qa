@@ -143,7 +143,7 @@ SheetManager.SHEET_CONFIG = {
   'obtenerVendedoresPorUsuario': { headers: ['correo', 'vendedorcompleto', 'codvendedor'] },
   'Administradores': { headers: ['correo_admin'] },
   'Bancos': { headers: ['Nombre del Banco'] },
-  'analista': { headers: ['sucursal', 'codigousuario'] }, // NUEVA HOJA
+  'analista': { headers: ['sucursal', 'codigousuario'] },
   'Respuestas': {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
@@ -293,11 +293,6 @@ class DataFetcher {
       codigo: String(row[0]).trim()
     })).filter(b => b.nombre && b.codigo);
   }
-
-  /**
-   * NUEVA FUNCIÓN: Obtiene las sucursales por analista desde la API de eFactory.
-   * @returns {Array<Object>} Un array de objetos, cada uno con `sucursal` y `codigousuario`.
-   */
   fetchSucursalesPorAnalistaFromApi() {
     const props = PropertiesService.getScriptProperties();
     const query = props.getProperty('SUCURSALES_USUARIOS_QUERY');
@@ -622,26 +617,54 @@ function doGet(e) {
   const token = params.token;
   const url = getWebAppUrl();
   let user = null;
-  if (token) user = checkAuth(token);
+
+  if (token) {
+    user = checkAuth(token); // Asumimos que checkAuth devuelve un objeto de usuario con una propiedad 'role'
+  }
+
   if (user) {
-    const page = String((params.view || params.page || params.template || '')).toLowerCase();
-    const templateName = page === 'report' ? 'Report' : 'Index';
-    const template = HtmlService.createTemplateFromFile(templateName);
-    template.user = user;
-    template.url = url;
-    template.token = token;
-    if (templateName === 'Report') {
-      template.meta = template.meta || { rangeLabel: 'Hoy y Ayer', user };
-      template.records = template.records || [];
+    // --- LÓGICA DE ENRUTAMIENTO POR ROL ---
+    let templateName;
+    const page = String((params.view || params.page || '')).toLowerCase();
+
+    if (page === 'report') {
+        templateName = 'Report';
+    } else if (user.role === 'Analista') {
+        templateName = 'AnalystView'; // Si el rol es Analista, carga su vista
+    } else {
+        templateName = 'Index'; // Por defecto, o si es Vendedor, carga Index
     }
-    return template.evaluate()
-      .setTitle(templateName === 'Report' ? 'Reporte de Registros' : 'Registro de Cobranzas')
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+    
+    try {
+        const template = HtmlService.createTemplateFromFile(templateName);
+        template.user = user;
+        template.url = url;
+        template.token = token;
+
+        if (templateName === 'Report') {
+          template.meta = template.meta || { rangeLabel: 'Hoy y Ayer', user };
+          template.records = template.records || [];
+        }
+
+        return template.evaluate()
+          .setTitle(templateName)
+          .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+
+    } catch (err) {
+        // Si no se encuentra un archivo de plantilla (p. ej., AnalystView.html no existe)
+        // muestra un error claro en lugar de fallar silenciosamente.
+        Logger.error(`Error al renderizar la plantilla '${templateName}': ${err.message}`);
+        return HtmlService.createHtmlOutput(
+            `<h2>Error del Servidor</h2><p>No se pudo cargar la vista: ${templateName}. Por favor, contacte al administrador.</p>`
+        ).setTitle('Error');
+    }
+      
   } else {
+    // Si no hay usuario, muestra la página de autenticación
     const template = HtmlService.createTemplateFromFile('Auth');
     template.url = url;
     return template.evaluate()
-      .setTitle('Iniciar Sesión - Registro de Cobranzas')
+      .setTitle('Iniciar Sesión - Conciliapp')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
   }
 }
@@ -783,7 +806,10 @@ function sincronizarVendedoresDesdeApi() {
   const dataFetcher = new DataFetcher();
   const api = dataFetcher.api;
   const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
-  const query = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc where v.status='A';`;
+  const query = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, 
+  CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) 
+  AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v 
+  JOIN sucursales s ON s.cod_suc = v.cod_suc where v.status='A';`;
   const vendedores = api.fetchData(query);
   if (vendedores && vendedores.length > 0) {
     sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
@@ -797,18 +823,12 @@ function sincronizarVendedoresDesdeApi() {
   }
 }
 
-/**
- * NUEVA FUNCIÓN: Sincroniza las sucursales por analista desde la API a la hoja 'analista'.
- * Se puede ejecutar manualmente desde el editor de Apps Script.
- * @returns {string} Un mensaje con el resultado de la operación.
- */
 function sincronizarSucursalesPorAnalista() {
   const dataFetcher = new DataFetcher();
   const sheet = SheetManager.getSheet('analista');
   const sucursales = dataFetcher.fetchSucursalesPorAnalistaFromApi();
   
   if (sucursales && sucursales.length > 0) {
-    // Limpiar hoja antes de escribir nuevos datos (excepto encabezados)
     if (sheet.getLastRow() > 1) {
       sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).clearContent();
     }
@@ -844,7 +864,10 @@ function setApiQueries() {
       ORDER BY cc.fec_ini DESC`;
   props.setProperty('FACTURAS_QUERY', facturasQuery);
 
-  const vendedoresQuery = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor, CONCAT(TRIM(v.cod_ven), '-', TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
+  const vendedoresQuery = `SELECT TRIM(v.correo) AS correo,  TRIM(v.cod_ven) AS codvendedor,
+   CONCAT(TRIM(v.cod_ven), '-',
+   TRIM(v.nom_ven)) AS vendedor_completo, TRIM(s.nom_suc) AS sucursal 
+   FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
 
   const clientesQuery = `WITH clientes_filtrados AS (
@@ -860,7 +883,6 @@ FROM clientes_filtrados cf
 JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
 
-  // NUEVA PROPIEDAD
   const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
   props.setProperty('SUCURSALES_USUARIOS_QUERY', sucursalesUsuariosQuery);
 }
