@@ -12,8 +12,22 @@ function initializeAuthSecret() {
 initializeAuthSecret();
 
 /**
+ * Determina el rol de un usuario.
+ * @param {string} email El correo del usuario.
+ * @returns {string} El rol del usuario ('Analista' o 'Vendedor').
+ */
+function getUserRole(email) {
+    const dataFetcher = new DataFetcher(); // Usamos la clase de Codigo.js
+    if (dataFetcher.isUserAdmin(email)) {
+        return 'Analista';
+    }
+    // Si no es admin, asumimos que es vendedor. Se podría añadir más lógica si hay más roles.
+    return 'Vendedor';
+}
+
+/**
  * Procesa el intento de login de un usuario.
- * Si es exitoso, genera un token de sesión único.
+ * Si es exitoso, genera un token de sesión único y almacena los datos del usuario, incluido el rol.
  * @param {string} email El correo del usuario.
  * @param {string} password La contraseña del usuario.
  * @returns {object} Un objeto con el estado del login y el token si es exitoso.
@@ -24,11 +38,10 @@ function processLogin(email, password) {
     const usersData = userSheet.getDataRange().getValues();
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Buscar al usuario por correo
     const userRow = usersData.find(row => row[0].toString().trim().toLowerCase() === normalizedEmail);
 
     if (!userRow) {
-      Logger.error(`Intento de login fallido (usuario no encontrado): ${email}`);
+      Logger.log(`Intento de login fallido (usuario no encontrado): ${email}`);
       throw new Error("Usuario o contraseña incorrectos.");
     }
 
@@ -36,35 +49,40 @@ function processLogin(email, password) {
     const passwordHash = hashPassword(password);
 
     if (storedHash !== passwordHash) {
-      Logger.error(`Intento de login fallido (contraseña incorrecta): ${email}`);
+      Logger.log(`Intento de login fallido (contraseña incorrecta): ${email}`);
       throw new Error("Usuario o contraseña incorrectos.");
     }
 
     if (userRow[2] !== 'activo') {
-      Logger.error(`Intento de login fallido (cuenta inactiva): ${email}`);
+      Logger.log(`Intento de login fallido (cuenta inactiva): ${email}`);
       throw new Error("La cuenta no está activa. Contacte al administrador.");
     }
 
-    // --- Lógica de Token de Sesión ---
+    // --- Lógica de Token de Sesión MEJORADA ---
     const sessionCache = CacheService.getUserCache();
     const token = Utilities.getUuid();
-    
-    // Guardar el token en caché, asociándolo con el email y nombre del usuario.
+    const userRole = getUserRole(normalizedEmail); // Obtenemos el rol
+
+    // Guardar el token en caché, asociándolo con email, nombre y ROL.
     // El token expira en 6 horas (21600 segundos).
-    const userData = { email: normalizedEmail, name: userRow[3] || normalizedEmail.split('@')[0] };
+    const userData = { 
+        email: normalizedEmail, 
+        name: userRow[3] || normalizedEmail.split('@')[0],
+        role: userRole // ¡Añadimos el rol a la sesión!
+    };
     sessionCache.put(token, JSON.stringify(userData), 21600);
 
-    Logger.log(`Login exitoso y token generado para: ${email}`);
-    return { status: 'SUCCESS', token: token };
+    Logger.log(`Login exitoso para: ${email} con rol: ${userRole}`);
+    return { status: 'SUCCESS', token: token, role: userRole }; // Devolvemos el rol al cliente
 
   } catch (e) {
     Logger.error(`Error en processLogin: ${e.message}`);
-    throw e;
+    throw e; // Lanza el error para que el cliente lo maneje
   }
 }
 
 /**
- * Valida un token de sesión.
+ * Valida un token de sesión y devuelve los datos del usuario, incluido el rol.
  * @param {string} token El token a validar.
  * @returns {object|null} Los datos del usuario si el token es válido, de lo contrario null.
  */
@@ -76,8 +94,13 @@ function checkAuth(token) {
   const userDataJson = sessionCache.get(token);
 
   if (userDataJson) {
-    // El token es válido, devolvemos los datos del usuario.
-    return JSON.parse(userDataJson);
+    const userData = JSON.parse(userDataJson);
+    // Si por alguna razón el rol no está en la sesión, lo volvemos a calcular
+    if (!userData.role) {
+        userData.role = getUserRole(userData.email);
+        sessionCache.put(token, JSON.stringify(userData), 21600); // Actualizamos la caché
+    }
+    return userData;
   }
   
   return null;
@@ -96,20 +119,10 @@ function logoutUser(token) {
     }
   } catch (e) {
     Logger.error(`Error en logoutUser: ${e.message}`);
-    // No lanzamos error al cliente, el logout debe ser silencioso.
   }
 }
 
-
-/**
- * Registra un nuevo usuario si su correo está en la lista de vendedores permitidos.
- * @param {string} name
- * @param {string} email
- * @param {string} password
- * @returns {string} Mensaje de éxito.
- */
 function registerUser(name, email, password) {
-  // ... (La lógica de registerUser no necesita cambios drásticos, pero nos aseguramos que esté completa)
   const normalizedEmail = email.trim().toLowerCase();
   if (!validateUserInVendedoresSheet(normalizedEmail)) {
     throw new Error("No está autorizado para registrarse. Su correo no se encuentra en la lista de vendedores.");

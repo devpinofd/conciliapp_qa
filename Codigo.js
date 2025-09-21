@@ -1,62 +1,24 @@
 /**
  * @fileoverview Lógica del servidor para la aplicación de cobranza.
  * Refactorizado con principios SOLID y mejores prácticas.
- * Incluye soporte para facturas múltiples (CSV) en una sola fila.
+ * Incluye soporte para facturas múltiples (CSV) en una sola fila y enrutamiento por roles.
  */
 
-// #region Funciones de Particionamiento (integradas desde PartitionManager.js)
-/**
- * Decide el tipo de partición a utilizar.
- * Modificado para forzar siempre la partición por vendedor.
- * @param {Object} record El registro de datos.
- * @returns {string} Siempre devuelve 'vendedor'.
- */
-function decidePartitionType(record) {
-  return 'vendedor';
-}
-
-/**
- * Devuelve el nombre de la partición según la estrategia y los datos proporcionados.
- * @param {Date} date La fecha para la partición.
- * @param {Object} opts Opciones que incluyen el tipo y datos adicionales.
- * @param {string} opts.type Estrategia de partición (ahora siempre 'vendedor').
- * @param {string} [opts.vendedor] Código del vendedor.
- * @returns {string} El nombre de la hoja de partición.
- */
-function getPartitionName(date, { type, vendedor }) {
-  const yyyy = date.getFullYear();
-  const monthNames = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-  const mm = monthNames[date.getMonth()];
-  const vendedorCodigo = vendedor || 'SIN_VENDED_ASIGNADO';
-
-  switch (type) {
-    case 'vendedor':
-      return `V_${vendedorCodigo}_${yyyy}_${mm}`;
-    default:
-      // Fallback a partición por mes si el tipo no es 'vendedor'
-      return `REG_${yyyy}_${mm}`;
-  }
-}
-
-/**
- * Asegura que una hoja de partición exista. Si no existe, la crea con su encabezado.
- * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} ss El Spreadsheet activo.
- * @param {string} name El nombre de la hoja a asegurar.
- * @param {string[]} header El array de strings para el encabezado.
- * @returns {GoogleAppsScript.Spreadsheet.Sheet} La hoja de cálculo (existente o nueva).
- */
-function ensurePartitionSheet(ss, name, header) {
-  let sh = ss.getSheetByName(name);
-  if (!sh) {
-    sh = ss.insertSheet(name);
-    if (header && header.length > 0) {
-      sh.getRange(1, 1, 1, header.length).setValues([header]);
-      sh.setFrozenRows(1);
+/** Limpieza controlada de propiedades del script */
+function clearScriptProperties() {
+  const ultimoIndiceAConservar = 6;
+  const propiedades = PropertiesService.getScriptProperties();
+  const todasLasClaves = propiedades.getKeys();
+  todasLasClaves.sort();
+  Logger.log('Iniciando limpieza de propiedades desde el cliente.');
+  todasLasClaves.forEach((clave, indice) => {
+    if (indice > ultimoIndiceAConservar) {
+      propiedades.deleteProperty(clave);
+      Logger.log(`Se eliminó la propiedad en el índice ${indice} (clave: "${clave}").`);
     }
-  }
-  return sh;
+  });
+  Logger.log(`Proceso de limpieza completado. Se conservaron las primeras ${ultimoIndiceAConservar + 1} propiedades.`);
 }
-// #endregion
 
 // #region Utilidades
 class Logger {
@@ -155,8 +117,7 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
       'Nro. de Referencia', 'Tipo de Cobro', 'Fecha de la Transferencia o Pago',
-      'Observaciones', 'Usuario Creador', 'ID Registro', 'Sucursal', 'EstadoRegistro', 
-      'AnalistaAsignado', 'FechaProcesado', 'ComentarioAnalista']
+      'Observaciones', 'Usuario Creador']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
   'Registros Eliminados': {
@@ -166,8 +127,7 @@ SheetManager.SHEET_CONFIG = {
       'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador']
   },
   'Usuarios': {
-    headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro', 
-              'Rol', 'Empresa', 'Sucursal', 'GrupoVentas']
+    headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro']
   }
 };
 
@@ -300,24 +260,6 @@ class DataFetcher {
       codigo: String(row[0]).trim()
     })).filter(b => b.nombre && b.codigo);
   }
-  fetchSucursalesPorUsuarioFromApi() {
-    const props = PropertiesService.getScriptProperties();
-    const query = props.getProperty('SUCURSALES_USUARIO_QUERY');
-    if (!query) {
-      Logger.error('La propiedad SUCURSALES_USUARIO_QUERY no está definida.');
-      throw new Error('No se encontró la consulta para cargar sucursales por usuario.');
-    }
-    try {
-      const data = this.api.fetchData(query);
-      return data.map(row => ({
-        nombre: String(row.nom_suc).trim(),
-        usuario: String(row.cod_usu).trim().toLowerCase()
-      }));
-    } catch (e) {
-      Logger.error(`Error en fetchSucursalesPorUsuarioFromApi: ${e.message}`, { query });
-      return [];
-    }
-  }
 }
 
 class CobranzaService {
@@ -382,47 +324,34 @@ class CobranzaService {
     return CacheManager.get('bancos', 86400, () => this.dataFetcher.fetchBancosFromSheet());
   }
 
-  submitData(data, user) {
-    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+  submitData(data, userEmail) {
+    // La lógica de particionamiento ha sido eliminada para simplificar
+    // y resolver el error de "sucursal". Se usará la hoja 'Respuestas' directamente.
+    const targetSheet = SheetManager.getSheet('Respuestas');
 
     const facturaCsvRaw = data.factura || data.documento || '';
     const facturaCsv = this._normalizeFacturaCsv(facturaCsvRaw);
     if (!facturaCsv) throw new Error('Debe indicar al menos una factura.');
+    
     const montoNum = parseFloat(data.montoPagado);
     if (isNaN(montoNum) || montoNum <= 0) throw new Error('Monto inválido.');
     if (!data.vendedor) throw new Error('Vendedor requerido.');
     if (!data.cliente) throw new Error('Código de cliente requerido.');
 
-    const fecha = new Date(data.fechaTransferenciaPago || Date.now());
-    const record = {
-        vendedorCodigo: data.vendedor,
-        bancoReceptor: data.bancoReceptor,
-    };
-    const partitionOpts = {
-        type: 'vendedor',
-        vendedor: record.vendedorCodigo,
-    };
-    const partitionName = getPartitionName(fecha, partitionOpts);
-    const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
-    const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
-
     let existingReferences = [];
-    if (partitionSheet.getLastRow() > 1) {
-      existingReferences = partitionSheet
-        .getRange(2, 10, partitionSheet.getLastRow() - 1, 1)
+    if (targetSheet.getLastRow() > 1) {
+      existingReferences = targetSheet
+        .getRange(2, 10, targetSheet.getLastRow() - 1, 1)
         .getValues()
         .flat();
     }
     if (existingReferences.includes(data.nroReferencia)) {
-      throw new Error('El número de referencia ya existe en esta partición.');
+      throw new Error('El número de referencia ya existe.');
     }
 
     const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
-
-    const nextId = getNextRecordId();
-    const sucursalUsuario = user.branch || 'NO_ASIGNADA';
 
     const row = [
       new Date(),
@@ -438,207 +367,92 @@ class CobranzaService {
       data.tipoCobro,
       data.fechaTransferenciaPago,
       data.observaciones,
-      user.email,
-      nextId,        // ID Registro
-      sucursalUsuario, // Sucursal
-      'Pendiente',   // EstadoRegistro
-      '',            // AnalistaAsignado
-      '',            // FechaProcesado
-      ''             // ComentarioAnalista
+      userEmail
     ];
 
-    partitionSheet.appendRow(row);
-    Logger.log(`Formulario enviado por ${user.email} a la partición ${partitionName}. ID: ${nextId}`);
+    targetSheet.appendRow(row);
+    Logger.log(`Formulario enviado por ${userEmail}. Facturas: ${facturaCsv}`);
     return '¡Datos recibidos con éxito!';
   }
 
-  getRecentRecords(vendedor, userEmail) {
+    getRecentRecords(vendedorFiltro, userEmail) {
     const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
-    const allSheets = ss.getSheets();
-    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
-    const monthOrder = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
-
-    const partitionSheets = allSheets
-      .map(s => s.getName())
-      .filter(name => partitionRegex.test(name))
-      .sort((a, b) => {
-        const aMatch = a.match(/(\d{4})_([a-z]{3})$/);
-        const bMatch = b.match(/(\d{4})_([a-z]{3})$/);
-        if (!aMatch || !bMatch) return 0;
-        const yearA = aMatch[1];
-        const monthA = aMatch[2];
-        const yearB = bMatch[1];
-        const monthB = bMatch[2];
-        if (yearA !== yearB) return yearB.localeCompare(yearA);
-        return monthOrder.indexOf(monthB) - monthOrder.indexOf(monthA);
-      });
-
-    let allRecords = [];
-    const RECORDS_TO_FETCH = this.REGISTROS_POR_PAGINA * 5; 
-
-    for (const sheetName of partitionSheets) {
-      if (allRecords.length >= RECORDS_TO_FETCH) break;
-      const sheet = ss.getSheetByName(sheetName);
-      if (sheet.getLastRow() <= 1) continue;
-      
-      const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-      const recordsWithMeta = values.map((row, index) => ({
-        data: row,
-        sheetName: sheetName,
-        rowIndex: index + 2 
-      }));
-      allRecords.push(...recordsWithMeta);
-    }
-    
-    allRecords.sort((a, b) => new Date(b.data[0]).getTime() - new Date(a.data[0]).getTime());
-
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
-    let filteredRecords;
+    let sheetsToReadNames = [];
 
     if (isAdmin) {
-      if (vendedor && vendedor !== 'Mostrar todos') {
-        const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
-        const vendedorSeleccionado = todosLosVendedores.find(v => v.codigo === vendedor);
-        const nombreVendedorFiltro = vendedorSeleccionado ? vendedorSeleccionado.nombre : null;
-        filteredRecords = allRecords.filter(r => r.data[1] === nombreVendedorFiltro);
-      } else {
-        filteredRecords = allRecords;
-      }
+        if (vendedorFiltro && vendedorFiltro !== 'Mostrar todos') {
+            // Analista/Admin filtra por un vendedor: leer solo esa partición. Es el caso más eficiente.
+            sheetsToReadNames.push(getPartitionName(vendedorFiltro));
+        } else {
+            // Analista/Admin ve "Mostrar todos": leer de todas las particiones de vendedores.
+            const allSheets = ss.getSheets();
+            for (const sheet of allSheets) {
+                const sheetName = sheet.getName();
+                // Identifica las hojas de partición por el prefijo acordado.
+                if (sheetName.startsWith('Respuestas_')) {
+                    sheetsToReadNames.push(sheetName);
+                }
+            }
+        }
     } else {
-      const misVendedores = this.dataFetcher.fetchVendedoresFromSheetByUser(userEmail).map(v => v.nombre);
-      filteredRecords = allRecords.filter(r => misVendedores.includes(r.data[1]));
+        // Usuario Vendedor normal: leer solo de sus particiones asignadas.
+        const mySellers = this.dataFetcher.fetchVendedoresFromSheetByUser(userEmail);
+        sheetsToReadNames = mySellers.map(v => getPartitionName(v.codigo));
     }
 
-    const finalRecords = filteredRecords.slice(0, this.REGISTROS_POR_PAGINA);
+    if (sheetsToReadNames.length === 0) {
+        Logger.log(`getRecentRecords: No se encontraron hojas para leer para el usuario ${userEmail} con filtro ${vendedorFiltro}`);
+        return [];
+    }
+
+    let allRecords = [];
+    for (const sheetName of sheetsToReadNames) {
+        const sheet = ss.getSheetByName(sheetName);
+        if (sheet && sheet.getLastRow() > 1) {
+            // Corregido: El rango de lectura era incorrecto.
+            const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+            values.forEach((row, index) => {
+                // Solo procesa filas que tengan un timestamp válido.
+                if (row[0] && row[0] instanceof Date) {
+                    allRecords.push({ data: row, sheetName: sheetName, rowIndex: index + 2 });
+                }
+            });
+        }
+    }
+
+    // Ordena todos los registros combinados por fecha (columna 0) de más reciente a más antiguo.
+    allRecords.sort((a, b) => b.data[0].getTime() - a.data[0].getTime());
+
+    // Después de ordenar, toma solo los N más recientes.
+    const recentRecords = allRecords.slice(0, this.REGISTROS_POR_PAGINA);
     const now = new Date().getTime();
     const FIVE_MINUTES_IN_MS = 5 * 60 * 1000;
 
-    return finalRecords.map(record => {
-      const row = record.data;
-      const timestamp = new Date(row[0]).getTime();
-      const ageInMs = now - timestamp;
-      const puedeEliminarPorTiempo = ageInMs < FIVE_MINUTES_IN_MS;
+    return recentRecords.map(record => {
+      const rowData = record.data;
+      const timestamp = rowData[0].getTime();
+      const puedeEliminar = (rowData[13] === userEmail) && (now - timestamp < FIVE_MINUTES_IN_MS);
       
       return {
-        rowIndex: JSON.stringify({ sheet: record.sheetName, row: record.rowIndex }),
-        fechaEnvio: Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
-        vendedor: row[1],
-        clienteNombre: row[3],
-        factura: row[4],
-        monto: (typeof row[5] === 'number') ? row[5].toFixed(2) : row[5],
-        bancoEmisor: row[7],
-        bancoReceptor: row[8],
-        referencia: row[9],
-        creadoPor: row[13],
-        puedeEliminar: (row[13] === userEmail && puedeEliminarPorTiempo)
+        rowIndex: JSON.stringify({ sheetName: record.sheetName, row: record.rowIndex }),
+        fechaEnvio: Utilities.formatDate(new Date(timestamp), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
+        vendedor: rowData[1],
+        clienteNombre: rowData[3],
+        factura: rowData[4],
+        monto: (typeof rowData[5] === 'number') ? rowData[5].toFixed(2) : rowData[5],
+        bancoEmisor: rowData[7],
+        bancoReceptor: rowData[8],
+        referencia: rowData[9],
+        creadoPor: rowData[13],
+        puedeEliminar: puedeEliminar
       };
     });
   }
 
-  getRecordsForAnalyst(user, filters) {
-    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
-    const allSheets = ss.getSheets();
-    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
-    
-    let allRecords = [];
-    const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
-    const sucursalIndex = headers.indexOf('Sucursal');
-    const estadoIndex = headers.indexOf('EstadoRegistro');
-
-    for (const sheet of allSheets) {
-        if (!partitionRegex.test(sheet.getName())) continue;
-        if (sheet.getLastRow() <= 1) continue;
-
-        const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-        
-        const filteredValues = values.filter(row => {
-            const recordSucursal = row[sucursalIndex];
-            const recordEstado = row[estadoIndex];
-
-            const scopeMatch = (user.branch === 'TODAS' || filters.branch === 'TODAS' || user.branch === recordSucursal || filters.branch === recordSucursal);
-            const statusMatch = (filters.status === 'Todos' || filters.status === recordEstado);
-            
-            return scopeMatch && statusMatch;
-        });
-
-        const recordsWithMeta = filteredValues.map((row) => {
-            const recordObject = {};
-            headers.forEach((header, i) => {
-                recordObject[header] = row[i];
-            });
-            const originalIndexInSheet = values.findIndex(originalRow => originalRow[14] === row[14]);
-            recordObject.recordIdentifier = JSON.stringify({ sheet: sheet.getName(), row: originalIndexInSheet + 2 });
-            return recordObject;
-        });
-
-        allRecords.push(...recordsWithMeta);
-    }
-    
-    allRecords.sort((a, b) => new Date(b.Timestamp).getTime() - new Date(a.Timestamp).getTime());
-
-    return allRecords.slice(0, 200);
-  }
-
-  updateRecordStatus(user, identifier, newStatus, comment = '') {
-    if (user.role !== 'Analista' && user.role !== 'Admin') {
-      throw new Error('No tienes permiso para realizar esta acción.');
-    }
-
-    const { sheet: sheetName, row: rowNum } = JSON.parse(identifier);
-    if (!sheetName || !rowNum) {
-      throw new Error('Identificador de registro inválido.');
-    }
-
-    const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
-    if (!sheet) {
-      throw new Error(`La hoja de partición '${sheetName}' no fue encontrada.`);
-    }
-
-    const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
-    const estadoCol = headers.indexOf('EstadoRegistro') + 1;
-    const analistaCol = headers.indexOf('AnalistaAsignado') + 1;
-    const fechaProcCol = headers.indexOf('FechaProcesado') + 1;
-    const comentarioCol = headers.indexOf('ComentarioAnalista') + 1;
-
-    if ([estadoCol, analistaCol, fechaProcCol, comentarioCol].includes(0)) {
-        throw new Error('Faltan columnas de estado en la hoja de cálculo.');
-    }
-
-    sheet.getRange(rowNum, estadoCol).setValue(newStatus);
-    sheet.getRange(rowNum, analistaCol).setValue(user.email);
-    sheet.getRange(rowNum, fechaProcCol).setValue(new Date());
-    sheet.getRange(rowNum, comentarioCol).setValue(comment);
-    
-    const recordId = sheet.getRange(rowNum, headers.indexOf('ID Registro') + 1).getValue();
-    Logger.log(`El analista ${user.email} actualizó el registro ID ${recordId} a estado '${newStatus}'.`);
-    
-    return `Registro actualizado a '${newStatus}' con éxito.`;
-  }
-
-  getSucursalesParaAnalista(user) {
-    return CacheManager.get('sucursales_por_usuario', 3600, () => {
-      const todasLasAsignaciones = this.dataFetcher.fetchSucursalesPorUsuarioFromApi();
-      const misSucursales = todasLasAsignaciones
-        .filter(asignacion => asignacion.usuario === user.email)
-        .map(asignacion => asignacion.nombre);
-      
-      // Eliminar duplicados si un usuario está asignado varias veces a la misma sucursal
-      return [...new Set(misSucursales)];
-    });
-  }
-
   deleteRecord(rowIndex, userEmail) {
-    const { sheet: sheetName, row: rowNum } = JSON.parse(rowIndex);
-    if (!sheetName || !rowNum) {
-      throw new Error('Información de registro inválida para eliminación.');
-    }
-    
-    const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
-    if (!sheet) {
-      throw new Error(`La hoja de partición '${sheetName}' no fue encontrada.`);
-    }
-
-    const rowToDelete = sheet.getRange(rowNum, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const sheet = SheetManager.getSheet('Respuestas');
+    const rowToDelete = sheet.getRange(rowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
     if (rowToDelete[13] !== userEmail) {
       throw new Error('No tienes permiso para eliminar este registro.');
     }
@@ -651,35 +465,26 @@ class CobranzaService {
     }
     const auditSheet = SheetManager.getSheet('Registros Eliminados');
     auditSheet.appendRow([new Date(), userEmail, ...rowToDelete]);
-    sheet.deleteRow(rowNum);
-    Logger.log(`Registro eliminado por ${userEmail}. Fila: ${rowNum} en hoja: ${sheetName}`);
+    sheet.deleteRow(rowIndex);
+    Logger.log(`Registro eliminado por ${userEmail}. Fila: ${rowIndex}`);
     return 'Registro eliminado y archivado con éxito.';
   }
 }
 
+// Reportes PDF
 class ReportService {
   constructor(dataFetcher) { this.dataFetcher = dataFetcher; }
   getRecordsInDateRange(userEmail, vendedorFiltro, start, end) {
-    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
-    const allSheets = ss.getSheets();
-    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
-    
-    let allRecordsInRange = [];
-
-    for (const sheet of allSheets) {
-        if (!partitionRegex.test(sheet.getName())) continue;
-        if (sheet.getLastRow() <= 1) continue;
-
-        const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-        const inRange = values.filter(row => {
-            const ts = new Date(row[0]).getTime();
-            return ts >= start.getTime() && ts <= end.getTime();
-        });
-        allRecordsInRange.push(...inRange);
-    }
-    
+    const sheet = SheetManager.getSheet('Respuestas');
+    const lastRow = sheet.getLastRow();
+    if (lastRow <= 1) return [];
+    const values = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
+    const inRange = values.filter(row => {
+      const ts = new Date(row[0]).getTime();
+      return ts >= start.getTime() && ts <= end.getTime();
+    });
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
-    let filtered = allRecordsInRange;
+    let filtered = inRange;
     if (isAdmin) {
       if (vendedorFiltro && vendedorFiltro !== 'Mostrar todos') {
         const todos = this.dataFetcher.fetchAllVendedoresFromSheet();
@@ -721,60 +526,14 @@ class ReportService {
 // #endregion
 
 // #region API pública Apps Script
-const cobranzaService = new CobranzaService(new DataFetcher());
+// Instancia única de los servicios para ser usada por las funciones globales
+const dataFetcher = new DataFetcher();
+const cobranzaService = new CobranzaService(dataFetcher);
+const reportService = new ReportService(dataFetcher);
+
 
 function getWebAppUrl() {
   return ScriptApp.getService().getUrl();
-}
-
-function getNextRecordId() {
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000); 
-  try {
-    const properties = PropertiesService.getScriptProperties();
-    const lastId = parseInt(properties.getProperty('lastRecordId') || '0');
-    const nextId = lastId + 1;
-    properties.setProperty('lastRecordId', nextId.toString());
-    return nextId;
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function checkAuth(token) {
-  try {
-    const cache = CacheService.getScriptCache();
-    const userEmail = cache.get(token);
-    if (!userEmail) return null;
-
-    const sheet = SheetManager.getSheet('Usuarios');
-    const data = sheet.getDataRange().getValues();
-    const headers = data.shift();
-    
-    const emailIndex = headers.indexOf('Correo');
-    const nameIndex = headers.indexOf('Nombre');
-    const roleIndex = headers.indexOf('Rol');
-    const companyIndex = headers.indexOf('Empresa');
-    const branchIndex = headers.indexOf('Sucursal');
-    const salesGroupIndex = headers.indexOf('GrupoVentas');
-
-    const userRow = data.find(row => row[emailIndex].toLowerCase() === userEmail.toLowerCase());
-
-    if (userRow) {
-      return {
-        email: userRow[emailIndex],
-        name: userRow[nameIndex] || userEmail,
-        role: userRow[roleIndex] || 'Vendedor',
-        company: userRow[companyIndex],
-        branch: userRow[branchIndex],
-        salesGroup: userRow[salesGroupIndex]
-      };
-    }
-    return null;
-  } catch (e) {
-    Logger.error('Error en checkAuth: ' + e.message);
-    return null;
-  }
 }
 
 function doGet(e) {
@@ -782,28 +541,50 @@ function doGet(e) {
   const token = params.token;
   const url = getWebAppUrl();
   let user = null;
-  if (token) user = checkAuth(token);
+
+  if (token) {
+    user = checkAuth(token);
+  }
 
   if (user) {
-    let templateName = 'Index';
-    if (user.role === 'Analista' || user.role === 'Admin') {
-      templateName = 'AnalystView';
+    let templateName;
+    const page = String((params.view || params.page || '')).toLowerCase();
+
+    if (page === 'report') {
+        templateName = 'Report';
+    } else if (user.role === 'Analista') {
+        templateName = 'AnalystView';
+    } else {
+        templateName = 'Index';
     }
     
-    const template = HtmlService.createTemplateFromFile(templateName);
-    template.user = user;
-    template.url = url;
-    template.token = token;
+    try {
+        const template = HtmlService.createTemplateFromFile(templateName);
+        template.user = user;
+        template.url = url;
+        template.token = token;
 
-    const title = templateName === 'Index' ? 'Registro de Cobranzas' : 'Panel de Analista de Cobranzas';
-    return template.evaluate()
-      .setTitle(title)
-      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+        if (templateName === 'Report') {
+          template.meta = template.meta || { rangeLabel: 'Hoy y Ayer', user };
+          template.records = template.records || [];
+        }
+
+        return template.evaluate()
+          .setTitle(templateName)
+          .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+
+    } catch (err) {
+        Logger.error(`Error al renderizar la plantilla '${templateName}': ${err.message}`);
+        return HtmlService.createHtmlOutput(
+            `<h2>Error del Servidor</h2><p>No se pudo cargar la vista: ${templateName}. Por favor, contacte al administrador.</p>`
+        ).setTitle('Error');
+    }
+      
   } else {
     const template = HtmlService.createTemplateFromFile('Auth');
     template.url = url;
     return template.evaluate()
-      .setTitle('Iniciar Sesión - Registro de Cobranzas')
+      .setTitle('Iniciar Sesión - Conciliapp')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
   }
 }
@@ -818,48 +599,166 @@ function withAuth(token, action) {
   return action(user);
 }
 
-function loadVendedores(token, forceRefresh) { return withAuth(token, (user) => cobranzaService.getVendedores(user.email, forceRefresh)); }
-function cargarClientesEnPregunta1(token, codVendedor) { return withAuth(token, () => { if (!codVendedor) return '<option value="" disabled selected>Seleccione un cliente</option>'; return cobranzaService.getClientesHtml(codVendedor); }); }
-function obtenerFacturas(token, codVendedor, codCliente) { return withAuth(token, () => cobranzaService.getFacturas(codVendedor, codCliente)); }
-function obtenerTasaBCV(token) { return withAuth(token, () => cobranzaService.getBcvRate()); }
-function obtenerBancos(token) { return withAuth(token, () => cobranzaService.getBancos()); }
-function enviarDatos(token, datos) { return withAuth(token, (user) => cobranzaService.submitData(datos, user)); }
-function obtenerRegistrosEnviados(token, vendedorFiltro) { return withAuth(token, (user) => cobranzaService.getRecentRecords(vendedorFiltro, user.email)); }
-function getRecordsForAnalyst(token, filters) { return withAuth(token, (user) => cobranzaService.getRecordsForAnalyst(user, filters)); }
-function updateRecordStatus(token, identifier, newStatus, comment) { return withAuth(token, (user) => cobranzaService.updateRecordStatus(user, identifier, newStatus, comment)); }
-function getSucursalesDisponibles(token) { return withAuth(token, (user) => cobranzaService.getSucursalesParaAnalista(user)); }
-function eliminarRegistro(token, rowIndex) { return withAuth(token, (user) => cobranzaService.deleteRecord(rowIndex, user.email)); }
-function descargarRegistrosPDF(token, vendedorFiltro) { return withAuth(token, (user) => { try { const tz = Session.getScriptTimeZone(); const now = new Date(); const end = new Date(Utilities.formatDate(now, tz, 'yyyy/MM/dd 23:59:59')); const y = new Date(now); y.setDate(now.getDate() - 1); const start = new Date(Utilities.formatDate(y, tz, 'yyyy/MM/dd 00:00:00')); const reportService = new ReportService(new DataFetcher()); const records = reportService.getRecordsInDateRange(user.email, vendedorFiltro, start, end); const meta = { user, rangeLabel: `desde ${Utilities.formatDate(start, tz, 'dd/MM/yyyy HH:mm')} hasta ${Utilities.formatDate(end, tz, 'dd/MM/yyyy HH:mm')}`, filename: `Registros_${Utilities.formatDate(y, tz, 'yyyyMMdd')}_${Utilities.formatDate(now, tz, 'yyyyMMdd')}.pdf` }; const pdf = reportService.buildPdf(records, meta); return { filename: meta.filename, base64: Utilities.base64Encode(pdf.getBytes()) }; } catch (e) { Logger.error(`Error en descargarRegistrosPDF: ${e.message}`); throw e; } }); }
-function sincronizarVendedoresDesdeApi() { const dataFetcher = new DataFetcher(); const api = dataFetcher.api; const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario'); const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`; const vendedores = api.fetchData(query); if (vendedores && vendedores.length > 0) { sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent(); const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]); sheet.getRange(2, 1, values.length, values[0].length).setValues(values); Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`); return `Sincronización completada. ${vendedores.length} vendedores actualizados.`; } else { Logger.log('Sincronización de vendedores: No se encontraron registros.'); return 'No se encontraron vendedores para sincronizar.'; } }
+// --- FUNCIONES GLOBALES "PUENTE" ---
+
+function loadVendedores(token, forceRefresh) {
+  return withAuth(token, (user) => cobranzaService.getVendedores(user.email, forceRefresh));
+}
+
+function cargarClientesEnPregunta1(token, codVendedor) {
+  return withAuth(token, () => {
+    if (!codVendedor) return '<option value="" disabled selected>Seleccione un cliente</option>';
+    return cobranzaService.getClientesHtml(codVendedor);
+  });
+}
+
+function obtenerFacturas(token, codVendedor, codCliente) {
+  return withAuth(token, () => cobranzaService.getFacturas(codVendedor, codCliente));
+}
+
+function obtenerTasaBCV(token) {
+  return withAuth(token, () => cobranzaService.getBcvRate());
+}
+
+function obtenerBancos(token) {
+  return withAuth(token, () => cobranzaService.getBancos());
+}
+
+function enviarDatos(token, datos) {
+  return withAuth(token, (user) => cobranzaService.submitData(datos, user.email));
+}
+
+function obtenerRegistrosEnviados(token, vendedorFiltro) {
+  return withAuth(token, (user) => cobranzaService.getRecentRecords(vendedorFiltro, user.email));
+}
+
+function eliminarRegistro(token, rowIndex) {
+  return withAuth(token, (user) => cobranzaService.deleteRecord(rowIndex, user.email));
+}
+
+function descargarRegistrosPDF(token, vendedorFiltro) {
+  return withAuth(token, (user) => {
+    try {
+      const tz = Session.getScriptTimeZone();
+      const now = new Date();
+      const end = new Date(Utilities.formatDate(now, tz, 'yyyy/MM/dd 23:59:59'));
+      const y = new Date(now);
+      y.setDate(now.getDate() - 1);
+      const start = new Date(Utilities.formatDate(y, tz, 'yyyy/MM/dd 00:00:00'));
+      
+      const records = reportService.getRecordsInDateRange(user.email, vendedorFiltro, start, end);
+      const meta = {
+        user,
+        rangeLabel: `desde ${Utilities.formatDate(start, tz, 'dd/MM/yyyy HH:mm')} hasta ${Utilities.formatDate(end, tz, 'dd/MM/yyyy HH:mm')}`,
+        filename: `Registros_${Utilities.formatDate(y, tz, 'yyyyMMdd')}_${Utilities.formatDate(now, tz, 'yyyyMMdd')}.pdf`
+      };
+      const pdf = reportService.buildPdf(records, meta);
+      return {
+        filename: meta.filename,
+        base64: Utilities.base64Encode(pdf.getBytes())
+      };
+    } catch (e) {
+      Logger.error(`Error en descargarRegistrosPDF: ${e.message}`);
+      throw e;
+    }
+  });
+}
+
+// Config helpers
+function sincronizarVendedoresDesdeApi() {
+  const dataFetcher = new DataFetcher();
+  const api = dataFetcher.api;
+  const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
+  const query = `SELECT TRIM(correo) AS correo, TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores where status='A';`;
+  const vendedores = api.fetchData(query);
+  if (vendedores && vendedores.length > 0) {
+    sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).clearContent();
+    const values = vendedores.map(v => [v.correo, v.vendedor_completo, v.codvendedor]);
+    sheet.getRange(2, 1, values.length, values[0].length).setValues(values);
+    Logger.log(`Sincronización de vendedores completada. ${vendedores.length} registros actualizados.`);
+    return `Sincronización completada. ${vendedores.length} vendedores actualizados.`;
+  } else {
+    Logger.log('Sincronización de vendedores: No se encontraron registros.');
+    return 'No se encontraron vendedores para sincronizar.';
+  }
+}
 
 function setApiQueries() {
   const props = PropertiesService.getScriptProperties();
-  const facturasQuery = `SELECT TRIM(cc.documento) AS documento, CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal, CAST(cc.fec_ini AS DATE) AS fec_ini, 'USD' AS cod_mon FROM cuentas_cobrar cc JOIN clientes c ON c.cod_cli = cc.cod_cli WHERE cc.cod_tip = 'FACT' AND cc.cod_cli = '{safeCodCliente}' AND cc.cod_ven = '{safeCodVendedor}' ORDER BY cc.fec_ini DESC`;
+  const facturasQuery = `SELECT 
+      TRIM(cc.documento) AS documento,
+      CAST((cc.mon_net * cc.tasa) AS DECIMAL(18,2)) AS mon_sal,
+      CAST(cc.fec_ini AS DATE) AS fec_ini,
+      'USD' AS cod_mon
+    FROM cuentas_cobrar cc
+    JOIN clientes c ON c.cod_cli = cc.cod_cli
+    WHERE cc.cod_tip = 'FACT' 
+      AND cc.cod_cli = '{safeCodCliente}' 
+      AND cc.cod_ven = '{safeCodVendedor}' 
+      ORDER BY cc.fec_ini DESC`;
   props.setProperty('FACTURAS_QUERY', facturasQuery);
   const vendedoresQuery = `SELECT TRIM(correo) AS correo,  TRIM(cod_ven) AS codvendedor, CONCAT(TRIM(cod_ven), '-', TRIM(nom_ven)) AS vendedor_completo FROM vendedores;`;
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
-  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli  FROM cuentas_cobrar  WHERE cod_tip = 'FACT'    AND cod_ven = '{codVendedor}'   GROUP BY cod_cli) SELECT trim(cf.cod_cli) AS Codigo_Cliente,        trim(c.nom_cli)  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli; `;
+  const clientesQuery = `SELECT DISTINCT TRIM(COD_CLI) AS Codigo_Cliente, TRIM(NOM_CLI) AS Nombre 
+FROM (
+    SELECT COD_CLI, NOM_CLI 
+    FROM CLIENTES 
+    WHERE COD_VEN = '{codVendedor}' 
+    UNION 
+    SELECT precios_clientes.COD_REG AS Codigo_Cliente, clientes.NOM_CLI AS Nombre
+    FROM precios_clientes 
+    JOIN CLIENTES ON clientes.COD_CLI = precios_clientes.COD_REG 
+    WHERE precios_clientes.COD_ART = '{codVendedor}' 
+ ) AS Combinada 
+ ORDER BY TRIM(NOM_CLI) ASC`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
-  const sucursalesUsuarioQuery = `select s.nom_suc, su.cod_usu from Sucursales_Usuarios su left join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
-  props.setProperty('SUCURSALES_USUARIO_QUERY', sucursalesUsuarioQuery);
 }
 
-function conservarPrimerasPropiedades() { var ultimoIndiceAConservar = 6; var propiedades = PropertiesService.getScriptProperties(); var todasLasClaves = propiedades.getKeys(); todasLasClaves.sort(); todasLasClaves.forEach(function (clave, indice) { if (indice > ultimoIndiceAConservar) { propiedades.deleteProperty(clave); } }); }
-function crearTriggerConservarPropiedades() { var triggers = ScriptApp.getProjectTriggers(); triggers.forEach(function (trigger) { if (trigger.getHandlerFunction() === 'conservarPrimerasPropiedades') { ScriptApp.deleteTrigger(trigger); } }); ScriptApp.newTrigger('conservarPrimerasPropiedades') .timeBased() .atHour(1) .everyDays(1) .create(); }
-function crearTriggerRotacionMensual() { const triggers = ScriptApp.getProjectTriggers(); triggers.forEach(function (trigger) { if (trigger.getHandlerFunction() === 'rotacionMensual_') { ScriptApp.deleteTrigger(trigger); } }); ScriptApp.newTrigger('rotacionMensual_') .timeBased() .onMonthDay(1) .atHour(2) .create(); Logger.log('Trigger de rotación mensual creado/actualizado correctamente.'); }
-
-function clearScriptProperties() {
-  const ultimoIndiceAConservar = 6;
-  const propiedades = PropertiesService.getScriptProperties();
-  const todasLasClaves = propiedades.getKeys();
+function conservarPrimerasPropiedades() {
+  var ultimoIndiceAConservar = 6;
+  var propiedades = PropertiesService.getScriptProperties();
+  var todasLasClaves = propiedades.getKeys();
   todasLasClaves.sort();
-  Logger.log('Iniciando limpieza de propiedades desde el cliente.');
-  todasLasClaves.forEach((clave, indice) => {
+  todasLasClaves.forEach(function (clave, indice) {
     if (indice > ultimoIndiceAConservar) {
       propiedades.deleteProperty(clave);
-      Logger.log(`Se eliminó la propiedad en el índice ${indice} (clave: "${clave}").`);
     }
   });
-  Logger.log(`Proceso de limpieza completado. Se conservaron las primeras ${ultimoIndiceAConservar + 1} propiedades.`);
 }
-// #endregion
+
+function crearTriggerConservarPropiedades() {
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'conservarPrimerasPropiedades') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+  ScriptApp.newTrigger('conservarPrimerasPropiedades')
+    .timeBased()
+    .atHour(1)
+    .everyDays(1)
+    .create();
+}
+
+/**
+ * Crea o actualiza el trigger para la rotación mensual de particiones.
+ * Se ejecutará el primer día de cada mes.
+ */
+function crearTriggerRotacionMensual() {
+  // Eliminar triggers antiguos para evitar duplicados
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'rotacionMensual_') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
+
+  // Crear el nuevo trigger
+  ScriptApp.newTrigger('rotacionMensual_')
+    .timeBased()
+    .onMonthDay(1)
+    .atHour(2) // Ejecutar a las 2 AM para evitar horas pico
+    .create();
+    
+  Logger.log('Trigger de rotación mensual creado/actualizado correctamente.');
+}
