@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Formulario de Cobranzas</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    <?!= include('Styles'); ?>
+    <?!= include('styles'); ?>
 </head>
 <body>
     <div id="notification" class="notification"></div>
@@ -205,30 +205,21 @@
         const webAppUrl = "<?!= url ?>";
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
 
-        function safeRedirect(url) {
-            const link = document.createElement('a');
-            link.href = url;
-            link.target = '_top';
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-        }
-
         (function validateInitialToken() {
             if (!sessionToken) {
-                safeRedirect(webAppUrl);
+                window.top.location.href = webAppUrl;
                 return;
             }
             google.script.run
                 .withSuccessHandler(user => {
                     if (!user) {
                         localStorage.removeItem('sessionToken');
-                        safeRedirect(webAppUrl);
+                        window.top.location.href = webAppUrl;
                     }
                 })
                 .withFailureHandler(() => {
                     localStorage.removeItem('sessionToken');
-                    safeRedirect(webAppUrl);
+                    window.top.location.href = webAppUrl;
                 })
                 .checkAuth(sessionToken);
         })();
@@ -277,7 +268,12 @@
                 };
             }
             toggleLoading(show) { this.elements.loadingSpinner.style.display = show ? 'flex' : 'none'; }
-            showNotification(message, type = 'success') { this.elements.notification.textContent = message; this.elements.notification.className = `notification ${type} visible`; setTimeout(() => { this.elements.notification.classList.remove('visible'); }, 4000); }
+            showNotification(message, type = 'success') {
+                const el = this.elements.notification;
+                el.textContent = message;
+                el.className = `notification ${type} visible`;
+                setTimeout(() => { el.className = `notification ${type}`; }, 3000);
+            }
             showDeleteModal() { this.elements.deleteModal.style.display = 'block'; }
             hideDeleteModal() { this.elements.deleteModal.style.display = 'none'; }
             updateBcvRate(rate) { this.elements.tasaOficial.textContent = rate ? `Tasa Oficial BCV: Bs. ${rate.toFixed(2)}` : 'Tasa BCV no disponible'; }
@@ -297,7 +293,7 @@
                     const tr = document.createElement('tr');
                     tr.innerHTML = `
                         <td data-label="Acciones">
-                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${record.rowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"></path></svg></button>` : ''}
+                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index='${record.rowIndex}'><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>` : ''}
                         </td>
                         <td data-label="Fecha">${record.fechaEnvio || record.fecha}</td>
                         <td data-label="Vendedor">${record.vendedor}</td>
@@ -353,6 +349,7 @@
                 this.currentVendedor = null;
                 this.registroToDelete = null;
                 this.bcvRate = null;
+                this.isAdmin = false;
             }
             
             async loadInitialData(forceRefresh = false) {
@@ -361,6 +358,11 @@
                 try {
                     await this.loadBcvRate(forceRefresh);
                     await this.loadVendedores(forceRefresh);
+                    
+                    const vendedorSelect = this.ui.elements.vendedorSelect;
+                    this.isAdmin = Array.from(vendedorSelect.options).some(opt => opt.value === 'Mostrar todos');
+                    this.currentVendedor = vendedorSelect.value;
+
                     await this.loadRecords(this.currentVendedor, forceRefresh);
                 } catch (error) {
                     this.ui.showNotification(`Error al cargar datos: ${error.message}`, 'error');
@@ -377,7 +379,7 @@
                     this.ui.populateSelect(this.ui.elements.vendedorSelect, options, 'Seleccione un vendedor');
                     if (this.ui.elements.vendedorSelect.options.length === 2) { 
                         this.ui.elements.vendedorSelect.selectedIndex = 1; 
-                        await this.loadClientes(); 
+                        await this.onVendedorChange();
                     }
                 };
 
@@ -399,18 +401,28 @@
                     throw error;
                 }
             }
-
-            async loadClientes() {
+            
+            async onVendedorChange() {
                 const vendedor = this.ui.elements.vendedorSelect.value;
                 this.currentVendedor = vendedor;
                 this.ui.elements.clienteSelect.disabled = true;
                 this.ui.elements.facturaSelect.disabled = true;
                 this.facturasPendientes = [];
                 this.ui.clearResumen();
-                if (!vendedor || vendedor === 'Mostrar todos') return;
+
+                if (this.isAdmin) {
+                    await this.loadRecords(vendedor, true);
+                }
+
+                if (!vendedor || vendedor === 'Mostrar todos') {
+                    this.ui.elements.clienteSelect.innerHTML = '<option value="" disabled selected>Seleccione un cliente</option>';
+                    return;
+                };
+
                 const cacheKey = `clientes_${vendedor}`;
                 let cachedData = clientCache.get(cacheKey);
                 if (cachedData) { this.ui.populateSelect(this.ui.elements.clienteSelect, cachedData, 'Seleccione un cliente'); return; }
+                
                 this.ui.toggleLoading(true);
                 try {
                     const options = await this.runGoogleScript('cargarClientesEnPregunta1', sessionToken, vendedor);
@@ -419,6 +431,7 @@
                 } catch (error) { this.ui.showNotification(`Error al cargar clientes: ${error.message}`, 'error');
                 } finally { this.ui.toggleLoading(false); }
             }
+
             async loadFacturas() {
                 const cliente = this.ui.elements.clienteSelect.value;
                 const vendedor = this.ui.elements.vendedorSelect.value;
@@ -507,7 +520,7 @@
                 let ok = true;
                 document.querySelectorAll('.error').forEach(e => e.style.display = 'none');
                 const fields = [
-                    { id: 'vendedor', err: 'vendedorError' },
+                    { id: 'vendedor', err: 'vendedorError', condition: v => !v || v === 'Mostrar todos' },
                     { id: 'cliente', err: 'clienteError' },
                     { id: 'monto-pagado', err: 'montoError', condition: v => !v || +v <= 0 },
                     { id: 'forma-pago', err: 'formaPagoError' },
@@ -548,14 +561,14 @@
                 try {
                     const resp = await this.runGoogleScript('enviarDatos', sessionToken, data);
                     this.ui.showNotification(resp, 'success');
-                    this.ui.resetForm(true); // Mantiene el vendedor
+                    this.ui.resetForm(true);
                     
                     if(vendedorSeleccionado) {
                         this.ui.elements.vendedorSelect.value = vendedorSeleccionado;
-                        await this.loadClientes(); // Recarga la lista de clientes
+                        await this.onVendedorChange();
                         if (clienteSeleccionado) {
                             this.ui.elements.clienteSelect.value = clienteSeleccionado;
-                            await this.loadFacturas(); // Recarga las facturas para el mismo cliente
+                            await this.loadFacturas();
                         }
                     }
 
@@ -578,6 +591,7 @@
                     this.ui.showNotification('Error: ' + e.message, 'error');
                 } finally {
                     this.ui.toggleLoading(false);
+                    this.registroToDelete = null;
                 }
             }
             setRegistroToDelete(rowIndex) { this.registroToDelete = rowIndex; }
@@ -595,11 +609,19 @@
             const isNew = new URLSearchParams(window.location.search).get('new_session') === 'true';
             dataManager.loadInitialData(isNew);
 
-            uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.loadClientes());
+            uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.onVendedorChange());
             uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());
             uiManager.elements.facturaSelect.addEventListener('change', () => dataManager.updateFacturaSelectionSummary());
             uiManager.elements.form.addEventListener('submit', e => { e.preventDefault(); dataManager.submitForm(); });
-            uiManager.elements.recordsTableBody.addEventListener('click', e => { const btn = e.target.closest('.ghost-delete'); if (btn) { dataManager.setRegistroToDelete(btn.dataset.rowIndex); uiManager.showDeleteModal(); } });
+            
+            uiManager.elements.recordsTableBody.addEventListener('click', e => {
+                const btn = e.target.closest('.ghost-delete');
+                if (btn) {
+                    dataManager.setRegistroToDelete(btn.dataset.rowIndex);
+                    uiManager.showDeleteModal();
+                }
+            });
+
             uiManager.elements.confirmDeleteBtn.addEventListener('click', () => dataManager.deleteRecord());
             uiManager.elements.cancelDeleteBtn.addEventListener('click', () => uiManager.hideDeleteModal());
             window.addEventListener('click', e => { if (e.target === uiManager.elements.deleteModal) uiManager.hideDeleteModal(); });
@@ -616,11 +638,11 @@
                 try {
                     await dataManager.runGoogleScript('logoutUser', tokenToInvalidate);
                 } catch (error) {
-                    uiManager.showNotification(`Aviso: logout parcial (${error.message})`, 'error');
+                    console.warn(`Aviso: logout parcial en servidor (${error.message})`);
                 } finally {
                     localStorage.removeItem('sessionToken');
                     clientCache.clear();
-                    safeRedirect(webAppUrl);
+                    window.top.location.href = webAppUrl;
                 }
             });
 
