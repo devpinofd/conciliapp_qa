@@ -6,217 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Formulario de Cobranzas</title>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary-color: #2563eb;
-            --primary-dark-color: #1e40af;
-            --danger-color: #ef4444;
-            --danger-dark-color: #dc2626;
-            --background-light: #f0f9ff;
-            --background-card: #ffffff;
-            --text-dark: #0f172a;
-            --text-light: #334155;
-            --border-color: #cbd5e1;
-            --shadow-color: rgba(0, 0, 0, 0.1);
-        }
-        body {
-            font-family: 'Roboto', Arial, sans-serif;
-            background-color: var(--background-light);
-            margin: 0;
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            box-sizing: border-box;
-        }
-        .app-container {
-            width: 100%;
-            max-width: 1200px;
-        }
-        .app-header {
-            width: 100%;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 16px;
-            background-color: var(--background-card);
-            padding: 16px 24px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px var(--shadow-color);
-            box-sizing: border-box;
-            margin-bottom: 24px;
-        }
-        .app-header h2 {
-            color: var(--text-dark);
-            font-size: 20px;
-            margin: 0;
-        }
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .user-info span {
-            font-weight: 500;
-            color: var(--text-light);
-        }
-        .card {
-            background: var(--background-card);
-            width: 100%;
-            margin-bottom: 24px;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px var(--shadow-color);
-            transition: transform 0.2s ease-in-out;
-        }
-        .card:hover {
-            transform: translateY(-2px);
-        }
-        .card-header {
-            background: linear-gradient(90deg, #d81d26, #f63b6a);
-            color: #ffffff;
-            padding: 24px;
-            border-top-left-radius: 12px;
-            border-top-right-radius: 12px;
-        }
-        .card-body {
-            padding: 24px;
-        }
-        h1, h2, h3 {
-            margin: 0;
-            font-weight: 600;
-        }
-        .tasa-oficial-text {
-            text-align: center;
-            font-size: 1.1rem;
-            font-weight: 500;
-            color: var(--text-dark);
-            margin-bottom: 16px;
-        }
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 20px;
-        }
-        .form-grid-item {
-            display: flex;
-            flex-direction: column;
-        }
-        label {
-            margin-bottom: 8px;
-            color: var(--text-dark);
-            font-weight: 500;
-            font-size: 15px;
-        }
-        input, textarea, select {
-            width: 100%;
-            padding: 12px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            box-sizing: border-box;
-            font-size: 16px;
-            background-color: var(--background-card);
-            transition: border-color 0.3s, box-shadow 0.3s;
-        }
-        input:focus, textarea:focus, select:focus {
-            outline: none;
-            border-color: var(--primary-color);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.2);
-        }
-        .form-actions {
-            display: flex;
-            justify-content: flex-end;
-            margin-top: 24px;
-        }
-        .button {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: 500;
-            transition: background-color 0.3s, transform 0.1s, box-shadow 0.2s;
-        }
-        .button-primary { background-color: var(--primary-color); color: #ffffff; }
-        .button-primary:hover { background-color: var(--primary-dark-color); transform: translateY(-2px); }
-        .button-danger { background-color: var(--danger-color); color: #ffffff; }
-        .button-danger:hover { background-color: var(--danger-dark-color); transform: translateY(-2px); }
-        .button-secondary { background-color: #e2e8f0; color: var(--text-dark); }
-        .button-secondary:hover { background-color: var(--border-color); transform: translateY(-2px); }
-        
-        .notification { position: fixed; top: 20px; right: 20px; background-color: #10b981; color: #ffffff; padding: 16px; border-radius: 8px; box-shadow: 0 4px 12px var(--shadow-color); z-index: 1001; opacity: 0; transform: translateY(-20px); transition: opacity 0.3s, transform 0.3s; }
-        .notification.visible { opacity: 1; transform: translateY(0); }
-        .notification.error { background-color: var(--danger-color); }
-
-        #facturas-resumen {
-            border: 1px solid var(--border-color); border-radius: 8px; background: #f8fafc;
-            padding: 12px 14px; margin-top: 10px; display: none;
-        }
-        #facturas-resumen h4 { margin: 0 0 8px 0; font-size: 14px; color: var(--text-dark); }
-        .resumen-grid { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 8px; font-size: 13px; }
-        .resumen-grid div span.value { font-weight: 600; color: var(--primary-dark-color); }
-        #resumen-lista { list-style: none; margin: 0; padding: 0; max-height: 90px; overflow-y: auto;
-            font-family: monospace; font-size: 12px; line-height: 1.2em; border-top: 1px dashed var(--border-color); padding-top: 6px; }
-        #resumen-lista li { padding: 2px 0; }
-        
-        .records-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
-        .records-table { display: block; }
-        .records-table thead { display: none; }
-        .records-table tbody, .records-table tr { display: block; }
-        .records-table tr {
-            background-color: var(--background-card);
-            border: 1px solid #e2e8f0;
-            border-radius: 8px;
-            padding: 16px;
-            margin-bottom: 16px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        }
-        .records-table td {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 8px 0;
-            border-bottom: 1px solid #f1f5f9;
-        }
-        .records-table td:last-child { border-bottom: none; }
-        .records-table td::before {
-            content: attr(data-label);
-            font-weight: 500;
-            color: var(--text-light);
-        }
-        .ghost-delete { background: none; border: none; cursor: pointer; padding: 4px; }
-        .ghost-delete svg { width: 22px; height: 22px; fill: var(--danger-color); transition: fill 0.3s; }
-        .ghost-delete:hover svg { fill: var(--danger-dark-color); }
-
-        .loading-spinner-container { display: none; position: fixed; z-index: 1001; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); justify-content: center; align-items: center; }
-        .spinner { border: 4px solid rgba(255, 255, 255, 0.3); border-top: 4px solid var(--primary-color); border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; }
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-
-        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; overflow: auto; background-color: rgba(0, 0, 0, 0.6); }
-        .modal-content { background-color: var(--background-card); margin: 40% auto; padding: 24px; border-radius: 12px; width: 90%; max-width: 400px; box-shadow: 0 4px 20px rgba(0,0,0,0.2); text-align: center; }
-        .modal-buttons { display: flex; justify-content: center; gap: 16px; margin-top: 20px; }
-        
-        .error { color: var(--danger-color); font-size: 14px; margin-top: 4px; display: none; }
-
-        @media screen and (min-width: 768px) {
-            .form-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            .form-grid-full-width {
-                grid-column: 1 / -1;
-            }
-            .records-table { display: table; width: 100%; border-collapse: collapse; }
-            .records-table thead { display: table-header-group; }
-            .records-table tbody { display: table-row-group; }
-            .records-table tr { display: table-row; background: none; border: none; box-shadow: none; padding: 0; margin: 0; }
-            .records-table tr:nth-child(even) { background-color: #f8fafc; }
-            .records-table tr:hover { background-color: #f1f5f9; }
-            .records-table th, .records-table td { display: table-cell; padding: 14px; text-align: left; border-bottom: 1px solid #e2e8f0; }
-            .records-table td::before { display: none; }
-            .modal-content { margin: 15% auto; }
-        }
-    </style>
+    <?!= include('Styles'); ?>
 </head>
 <body>
     <div id="notification" class="notification"></div>
@@ -415,21 +205,30 @@
         const webAppUrl = "<?!= url ?>";
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
 
+        function safeRedirect(url) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.target = '_top';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
         (function validateInitialToken() {
             if (!sessionToken) {
-                window.top.location.href = webAppUrl;
+                safeRedirect(webAppUrl);
                 return;
             }
             google.script.run
                 .withSuccessHandler(user => {
                     if (!user) {
                         localStorage.removeItem('sessionToken');
-                        window.top.location.href = webAppUrl;
+                        safeRedirect(webAppUrl);
                     }
                 })
                 .withFailureHandler(() => {
                     localStorage.removeItem('sessionToken');
-                    window.top.location.href = webAppUrl;
+                    safeRedirect(webAppUrl);
                 })
                 .checkAuth(sessionToken);
         })();
@@ -478,7 +277,7 @@
                 };
             }
             toggleLoading(show) { this.elements.loadingSpinner.style.display = show ? 'flex' : 'none'; }
-            showNotification(message, type = 'success') { this.elements.notification.textContent = message; this.elements.notification.className = `notification ${type} visible`; setTimeout(() => this.elements.notification.classList.remove('visible'), 4000); }
+            showNotification(message, type = 'success') { this.elements.notification.textContent = message; this.elements.notification.className = `notification ${type} visible`; setTimeout(() => { this.elements.notification.classList.remove('visible'); }, 4000); }
             showDeleteModal() { this.elements.deleteModal.style.display = 'block'; }
             hideDeleteModal() { this.elements.deleteModal.style.display = 'none'; }
             updateBcvRate(rate) { this.elements.tasaOficial.textContent = rate ? `Tasa Oficial BCV: Bs. ${rate.toFixed(2)}` : 'Tasa BCV no disponible'; }
@@ -496,11 +295,9 @@
                 records.forEach(record => {
                     const facturas = (record.factura || '').split(',').map(f => f.trim()).filter(Boolean).join(', ');
                     const tr = document.createElement('tr');
-                    const encodedRowIndex = record.rowIndex ? btoa(record.rowIndex) : '';
-
                     tr.innerHTML = `
                         <td data-label="Acciones">
-                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${encodedRowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>` : ''}
+                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${record.rowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"></path></svg></button>` : ''}
                         </td>
                         <td data-label="Fecha">${record.fechaEnvio || record.fecha}</td>
                         <td data-label="Vendedor">${record.vendedor}</td>
@@ -610,12 +407,7 @@
                 this.ui.elements.facturaSelect.disabled = true;
                 this.facturasPendientes = [];
                 this.ui.clearResumen();
-                if (!vendedor || vendedor === 'Mostrar todos') {
-                    this.ui.elements.clienteSelect.innerHTML = '<option value="" disabled selected>Seleccione un cliente</option>';
-                    this.ui.elements.facturaSelect.innerHTML = '';
-                    await this.loadRecords(vendedor, true);
-                    return;
-                };
+                if (!vendedor || vendedor === 'Mostrar todos') return;
                 const cacheKey = `clientes_${vendedor}`;
                 let cachedData = clientCache.get(cacheKey);
                 if (cachedData) { this.ui.populateSelect(this.ui.elements.clienteSelect, cachedData, 'Seleccione un cliente'); return; }
@@ -625,10 +417,7 @@
                     clientCache.set(cacheKey, options);
                     this.ui.populateSelect(this.ui.elements.clienteSelect, options, 'Seleccione un cliente');
                 } catch (error) { this.ui.showNotification(`Error al cargar clientes: ${error.message}`, 'error');
-                } finally { 
-                    await this.loadRecords(vendedor, true);
-                    this.ui.toggleLoading(false); 
-                }
+                } finally { this.ui.toggleLoading(false); }
             }
             async loadFacturas() {
                 const cliente = this.ui.elements.clienteSelect.value;
@@ -789,7 +578,6 @@
                     this.ui.showNotification('Error: ' + e.message, 'error');
                 } finally {
                     this.ui.toggleLoading(false);
-                    this.registroToDelete = null;
                 }
             }
             setRegistroToDelete(rowIndex) { this.registroToDelete = rowIndex; }
@@ -811,19 +599,7 @@
             uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());
             uiManager.elements.facturaSelect.addEventListener('change', () => dataManager.updateFacturaSelectionSummary());
             uiManager.elements.form.addEventListener('submit', e => { e.preventDefault(); dataManager.submitForm(); });
-            
-            uiManager.elements.recordsTableBody.addEventListener('click', e => { 
-                const btn = e.target.closest('.ghost-delete'); 
-                if (btn) {
-                    const encodedRowIndex = btn.dataset.rowIndex;
-                    if (encodedRowIndex) {
-                        const decodedRowIndex = atob(encodedRowIndex);
-                        dataManager.setRegistroToDelete(decodedRowIndex); 
-                        uiManager.showDeleteModal();
-                    }
-                }
-            });
-            
+            uiManager.elements.recordsTableBody.addEventListener('click', e => { const btn = e.target.closest('.ghost-delete'); if (btn) { dataManager.setRegistroToDelete(btn.dataset.rowIndex); uiManager.showDeleteModal(); } });
             uiManager.elements.confirmDeleteBtn.addEventListener('click', () => dataManager.deleteRecord());
             uiManager.elements.cancelDeleteBtn.addEventListener('click', () => uiManager.hideDeleteModal());
             window.addEventListener('click', e => { if (e.target === uiManager.elements.deleteModal) uiManager.hideDeleteModal(); });
@@ -844,7 +620,7 @@
                 } finally {
                     localStorage.removeItem('sessionToken');
                     clientCache.clear();
-                    window.top.location.href = webAppUrl;
+                    safeRedirect(webAppUrl);
                 }
             });
 
