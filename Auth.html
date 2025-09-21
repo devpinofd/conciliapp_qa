@@ -269,6 +269,17 @@
         const loginWrapper = document.getElementById('login-form-wrapper');
         const registerWrapper = document.getElementById('register-form-wrapper');
 
+        // Secure navigation utility function
+        function secureNavigate(url) {
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.target = '_top';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+        }
+
         function switchForm(to) {
             const formToHide = (to === 'register') ? loginWrapper : registerWrapper;
             const formToShow = (to === 'register') ? registerWrapper : loginWrapper;
@@ -333,7 +344,7 @@
                         localStorage.setItem('sessionToken', response.token);
                         showNotification('Inicio de sesión exitoso. Redirigiendo...', 'success');
                         setTimeout(() => {
-                            window.top.location.href = webAppUrl + '?token=' + response.token + '&new_session=true';
+                            secureNavigate(webAppUrl + '?token=' + response.token + '&new_session=true');
                         }, 1000);
                     } else {
                         // Si el login no es exitoso pero la llamada sí, es un error de credenciales
@@ -387,7 +398,7 @@
             if (storedToken) {
                 showNotification('Sesión activa encontrada. Redirigiendo...', 'success');
                 setTimeout(() => {
-                    window.top.location.href = webAppUrl + '?token=' + storedToken;
+                    secureNavigate(webAppUrl + '?token=' + storedToken);
                 }, 500);
             } else {
                 // Si no hay token, muestra el formulario de login.

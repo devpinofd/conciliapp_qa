@@ -415,21 +415,32 @@
         const webAppUrl = "<?!= url ?>";
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
 
+        // Secure navigation utility function
+        function secureNavigate(url) {
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.target = '_top';
+            anchor.style.display = 'none';
+            document.body.appendChild(anchor);
+            anchor.click();
+            document.body.removeChild(anchor);
+        }
+
         (function validateInitialToken() {
             if (!sessionToken) {
-                window.top.location.href = webAppUrl;
+                secureNavigate(webAppUrl);
                 return;
             }
             google.script.run
                 .withSuccessHandler(user => {
                     if (!user) {
                         localStorage.removeItem('sessionToken');
-                        window.top.location.href = webAppUrl;
+                        secureNavigate(webAppUrl);
                     }
                 })
                 .withFailureHandler(() => {
                     localStorage.removeItem('sessionToken');
-                    window.top.location.href = webAppUrl;
+                    secureNavigate(webAppUrl);
                 })
                 .checkAuth(sessionToken);
         })();
@@ -844,7 +855,7 @@
                 } finally {
                     localStorage.removeItem('sessionToken');
                     clientCache.clear();
-                    window.top.location.href = webAppUrl;
+                    secureNavigate(webAppUrl);
                 }
             });
 
