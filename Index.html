@@ -8,7 +8,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <?!= include('styles'); ?>
 </head>
-<body>
+<<body>
     <div id="notification" class="notification"></div>
     <div id="loading-spinner" class="loading-spinner-container"><div class="spinner"></div></div>
 
@@ -23,7 +23,7 @@
 
         <div class="card">
             <header class="card-header">
-                <h1>Conciliapp - Registro de Cobranzas QA</h1>
+                <h1>Conciliapp - Registro de Cobranzas</h1>
             </header>
             <main class="card-body">
                 <p id="tasa-oficial" class="tasa-oficial-text">Cargando Tasa Oficial...</p>
@@ -268,12 +268,7 @@
                 };
             }
             toggleLoading(show) { this.elements.loadingSpinner.style.display = show ? 'flex' : 'none'; }
-            showNotification(message, type = 'success') {
-                const el = this.elements.notification;
-                el.textContent = message;
-                el.className = `notification ${type} visible`;
-                setTimeout(() => { el.className = `notification ${type}`; }, 3000);
-            }
+            showNotification(message, type = 'success') { this.elements.notification.textContent = message; this.elements.notification.className = `notification ${type} visible`; setTimeout(() => this.elements.notification.classList.remove('visible'), 4000); }
             showDeleteModal() { this.elements.deleteModal.style.display = 'block'; }
             hideDeleteModal() { this.elements.deleteModal.style.display = 'none'; }
             updateBcvRate(rate) { this.elements.tasaOficial.textContent = rate ? `Tasa Oficial BCV: Bs. ${rate.toFixed(2)}` : 'Tasa BCV no disponible'; }
@@ -291,9 +286,11 @@
                 records.forEach(record => {
                     const facturas = (record.factura || '').split(',').map(f => f.trim()).filter(Boolean).join(', ');
                     const tr = document.createElement('tr');
+                    const encodedRowIndex = record.rowIndex ? btoa(record.rowIndex) : '';
+
                     tr.innerHTML = `
                         <td data-label="Acciones">
-                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index='${record.rowIndex}'><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>` : ''}
+                            ${record.puedeEliminar ? `<button class="ghost-delete" title="Eliminar" data-row-index="${encodedRowIndex}"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></button>` : ''}
                         </td>
                         <td data-label="Fecha">${record.fechaEnvio || record.fecha}</td>
                         <td data-label="Vendedor">${record.vendedor}</td>
@@ -349,7 +346,6 @@
                 this.currentVendedor = null;
                 this.registroToDelete = null;
                 this.bcvRate = null;
-                this.isAdmin = false;
             }
             
             async loadInitialData(forceRefresh = false) {
@@ -358,11 +354,6 @@
                 try {
                     await this.loadBcvRate(forceRefresh);
                     await this.loadVendedores(forceRefresh);
-                    
-                    const vendedorSelect = this.ui.elements.vendedorSelect;
-                    this.isAdmin = Array.from(vendedorSelect.options).some(opt => opt.value === 'Mostrar todos');
-                    this.currentVendedor = vendedorSelect.value;
-
                     await this.loadRecords(this.currentVendedor, forceRefresh);
                 } catch (error) {
                     this.ui.showNotification(`Error al cargar datos: ${error.message}`, 'error');
@@ -379,7 +370,7 @@
                     this.ui.populateSelect(this.ui.elements.vendedorSelect, options, 'Seleccione un vendedor');
                     if (this.ui.elements.vendedorSelect.options.length === 2) { 
                         this.ui.elements.vendedorSelect.selectedIndex = 1; 
-                        await this.onVendedorChange();
+                        await this.loadClientes(); 
                     }
                 };
 
@@ -401,37 +392,34 @@
                     throw error;
                 }
             }
-            
-            async onVendedorChange() {
+
+            async loadClientes() {
                 const vendedor = this.ui.elements.vendedorSelect.value;
                 this.currentVendedor = vendedor;
                 this.ui.elements.clienteSelect.disabled = true;
                 this.ui.elements.facturaSelect.disabled = true;
                 this.facturasPendientes = [];
                 this.ui.clearResumen();
-
-                if (this.isAdmin) {
-                    await this.loadRecords(vendedor, true);
-                }
-
                 if (!vendedor || vendedor === 'Mostrar todos') {
                     this.ui.elements.clienteSelect.innerHTML = '<option value="" disabled selected>Seleccione un cliente</option>';
+                    this.ui.elements.facturaSelect.innerHTML = '';
+                    await this.loadRecords(vendedor, true);
                     return;
                 };
-
                 const cacheKey = `clientes_${vendedor}`;
                 let cachedData = clientCache.get(cacheKey);
                 if (cachedData) { this.ui.populateSelect(this.ui.elements.clienteSelect, cachedData, 'Seleccione un cliente'); return; }
-                
                 this.ui.toggleLoading(true);
                 try {
                     const options = await this.runGoogleScript('cargarClientesEnPregunta1', sessionToken, vendedor);
                     clientCache.set(cacheKey, options);
                     this.ui.populateSelect(this.ui.elements.clienteSelect, options, 'Seleccione un cliente');
                 } catch (error) { this.ui.showNotification(`Error al cargar clientes: ${error.message}`, 'error');
-                } finally { this.ui.toggleLoading(false); }
+                } finally { 
+                    await this.loadRecords(vendedor, true);
+                    this.ui.toggleLoading(false); 
+                }
             }
-
             async loadFacturas() {
                 const cliente = this.ui.elements.clienteSelect.value;
                 const vendedor = this.ui.elements.vendedorSelect.value;
@@ -520,7 +508,7 @@
                 let ok = true;
                 document.querySelectorAll('.error').forEach(e => e.style.display = 'none');
                 const fields = [
-                    { id: 'vendedor', err: 'vendedorError', condition: v => !v || v === 'Mostrar todos' },
+                    { id: 'vendedor', err: 'vendedorError' },
                     { id: 'cliente', err: 'clienteError' },
                     { id: 'monto-pagado', err: 'montoError', condition: v => !v || +v <= 0 },
                     { id: 'forma-pago', err: 'formaPagoError' },
@@ -561,14 +549,14 @@
                 try {
                     const resp = await this.runGoogleScript('enviarDatos', sessionToken, data);
                     this.ui.showNotification(resp, 'success');
-                    this.ui.resetForm(true);
+                    this.ui.resetForm(true); // Mantiene el vendedor
                     
                     if(vendedorSeleccionado) {
                         this.ui.elements.vendedorSelect.value = vendedorSeleccionado;
-                        await this.onVendedorChange();
+                        await this.loadClientes(); // Recarga la lista de clientes
                         if (clienteSeleccionado) {
                             this.ui.elements.clienteSelect.value = clienteSeleccionado;
-                            await this.loadFacturas();
+                            await this.loadFacturas(); // Recarga las facturas para el mismo cliente
                         }
                     }
 
@@ -609,19 +597,23 @@
             const isNew = new URLSearchParams(window.location.search).get('new_session') === 'true';
             dataManager.loadInitialData(isNew);
 
-            uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.onVendedorChange());
+            uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.loadClientes());
             uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());
             uiManager.elements.facturaSelect.addEventListener('change', () => dataManager.updateFacturaSelectionSummary());
             uiManager.elements.form.addEventListener('submit', e => { e.preventDefault(); dataManager.submitForm(); });
             
-            uiManager.elements.recordsTableBody.addEventListener('click', e => {
-                const btn = e.target.closest('.ghost-delete');
+            uiManager.elements.recordsTableBody.addEventListener('click', e => { 
+                const btn = e.target.closest('.ghost-delete'); 
                 if (btn) {
-                    dataManager.setRegistroToDelete(btn.dataset.rowIndex);
-                    uiManager.showDeleteModal();
+                    const encodedRowIndex = btn.dataset.rowIndex;
+                    if (encodedRowIndex) {
+                        const decodedRowIndex = atob(encodedRowIndex);
+                        dataManager.setRegistroToDelete(decodedRowIndex); 
+                        uiManager.showDeleteModal();
+                    }
                 }
             });
-
+            
             uiManager.elements.confirmDeleteBtn.addEventListener('click', () => dataManager.deleteRecord());
             uiManager.elements.cancelDeleteBtn.addEventListener('click', () => uiManager.hideDeleteModal());
             window.addEventListener('click', e => { if (e.target === uiManager.elements.deleteModal) uiManager.hideDeleteModal(); });
@@ -638,7 +630,7 @@
                 try {
                     await dataManager.runGoogleScript('logoutUser', tokenToInvalidate);
                 } catch (error) {
-                    console.warn(`Aviso: logout parcial en servidor (${error.message})`);
+                    uiManager.showNotification(`Aviso: logout parcial (${error.message})`, 'error');
                 } finally {
                     localStorage.removeItem('sessionToken');
                     clientCache.clear();

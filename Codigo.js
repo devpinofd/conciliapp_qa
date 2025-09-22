@@ -140,7 +140,7 @@ class SheetManager {
 SheetManager.SPREADSHEET_ID = '1jv3jlYSRfCj9VHPBla0g1l35AFEwNJzkWwrOML5oPY4';
 SheetManager.SHEET_CONFIG = {
   'CorreosPermitidos': { headers: null },
-  'obtenerVendedoresPorUsuario': { headers: ['correo', 'vendedorcompleto', 'codvendedor'] },
+  'obtenerVendedoresPorUsuario': { headers: ['correo', 'vendedorcompleto', 'codvendedor','Sucursal'] },
   'Administradores': { headers: ['correo_admin'] },
   'Bancos': { headers: ['Nombre del Banco'] },
   'analista': { headers: ['sucursal', 'codigousuario'] },
@@ -155,7 +155,7 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Fecha Eliminación', 'Usuario que Eliminó', 'Timestamp', 'Vendedor',
       'Codigo Cliente', 'Nombre Cliente', 'Factura', 'Monto Pagado',
       'Forma de Pago', 'Banco Emisor', 'Banco Receptor', 'Nro. de Referencia',
-      'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador', 'Sucursal']
+      'Tipo de Cobro', 'Fecha de la Transferencia o Pago', 'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal']
   },
   'Usuarios': {
     headers: ['Correo', 'Contraseña', 'Estado', 'Nombre', 'Fecha Registro']
@@ -207,7 +207,11 @@ class DataFetcher {
       .flat().map(email => email.trim().toLowerCase());
     return adminEmails.includes(normalizedUserEmail);
   }
-  fetchClientesFromApi(codVendedor) {
+    fetchClientesFromApi(codVendedor) {
+    // --- INICIO DE CAMBIOS PARA DEPURACIÓN ---
+    Logger.log(`Iniciando fetchClientesFromApi con codVendedor: '${codVendedor}' (Tipo: ${typeof codVendedor})`);
+    // --- FIN DE CAMBIOS PARA DEPURACIÓN ---
+
     if (!codVendedor || typeof codVendedor !== 'string') {
       Logger.error(`Código de vendedor inválido: ${codVendedor}`);
       return [];
@@ -220,18 +224,32 @@ class DataFetcher {
       throw new Error('No se encontró la consulta para cargar clientes.');
     }
     const query = queryTemplate.replace(/{codVendedor}/g, safeCodVendedor);
+    
+    // --- INICIO DE CAMBIOS PARA DEPURACIÓN ---
+//    Logger.log(`Ejecutando consulta de clientes: ${query}`);
+    // --- FIN DE CAMBIOS PARA DEPURACIÓN ---
+
     try {
       const data = this.api.fetchData(query);
+      
+      // --- INICIO DE CAMBIOS PARA DEPURACIÓN ---
+  //    Logger.log(`API devolvió ${data.length} clientes para el vendedor ${codVendedor}.`);
+      // --- FIN DE CAMBIOS PARA DEPURACIÓN ---
+
       return data.map(row => ({
         nombre: String(row.Nombre).trim(),
-        codigo: String(row.CodCliente).trim()
+        codigo: String(row.Cod_Cliente).trim()
       }));
     } catch (e) {
       Logger.error(`Error en fetchClientesFromApi: ${e.message}`, { query });
       return [];
     }
   }
-  fetchFacturasFromApi(codVendedor, codCliente) {
+   fetchFacturasFromApi(codVendedor, codCliente) {
+    // --- INICIO DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+ //   Logger.log(`Iniciando fetchFacturasFromApi con codVendedor: '${codVendedor}' (Tipo: ${typeof codVendedor}), codCliente: '${codCliente}' (Tipo: ${typeof codCliente})`);
+    // --- FIN DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+
     if (!codVendedor || !codCliente) {
       Logger.error(`Parámetros inválidos: codVendedor=${codVendedor}, codCliente=${codCliente}`);
       return [];
@@ -247,14 +265,23 @@ class DataFetcher {
     const query = queryTemplate
       .replace(/{safeCodCliente}/g, safeCodCliente)
       .replace(/{safeCodVendedor}/g, safeCodVendedor);
+
+    // --- INICIO DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+ //   Logger.log(`Ejecutando consulta de facturas: ${query}`);
+    // --- FIN DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+
     try {
       const data = this.api.fetchData(query);
+
+      // --- INICIO DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+  //    Logger.log(`API devolvió ${data.length} facturas para el vendedor ${codVendedor} y cliente ${codCliente}.`);
+      // --- FIN DE CAMBIOS PARA DEPURACIÓN DE FACTURAS ---
+
       return data.map(row => ({
         documento: String(row.documento).trim(),
         mon_sal: parseFloat(row.mon_sal) || 0,
         fec_ini: row.fec_ini ? new Date(row.fec_ini).toISOString().split('T')[0] : '',
-        cod_mon: String(row.cod_mon).trim() || 'USD',
-        sucursal: String(row.sucursal || '').trim() // CORRECCIÓN: Capturar y devolver la sucursal
+        cod_mon: String(row.cod_mon).trim() || 'USD'
       }));
     } catch (e) {
       Logger.error(`Error en fetchFacturasFromApi: ${e.message}`, { query });
@@ -324,6 +351,15 @@ class CobranzaService {
     return Session.getActiveUser().getEmail();
   }
 
+  /**
+   * Normaliza una cadena CSV de facturas:
+   * - split por coma
+   * - trim de cada elemento
+   * - filtra elementos vacíos
+   * - join con coma sin espacios
+   * @param {string} value
+   * @return {string}
+   */
   _normalizeFacturaCsv(value) {
     if (!value) return '';
     return value
@@ -378,7 +414,7 @@ class CobranzaService {
 
   submitData(data, userEmail) {
     const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
-
+ // Normalización y validaciones mínimas
     const facturaCsvRaw = data.factura || data.documento || '';
     const facturaCsv = this._normalizeFacturaCsv(facturaCsvRaw);
     if (!facturaCsv) throw new Error('Debe indicar al menos una factura.');
@@ -388,7 +424,10 @@ class CobranzaService {
     if (!data.vendedor) throw new Error('Vendedor requerido.');
     if (!data.cliente) throw new Error('Código de cliente requerido.');
 
-    const submissionDate = new Date();
+
+ // Lógica de particionamiento
+
+    const submissionDate = new Date(); // Fecha para determinar la partición (siempre la actual)
     const record = {
         vendedorCodigo: data.vendedor,
         bancoReceptor: data.bancoReceptor,
@@ -402,13 +441,18 @@ class CobranzaService {
     const header = SheetManager.SHEET_CONFIG['Respuestas'].headers;
     const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
 
+   // Validación de duplicidad de referencia (ahora en la partición correcta)
+    let existingReferences = [];
     if (partitionSheet.getLastRow() > 1) {
-      const existingReferences = partitionSheet.getRange(2, 10, partitionSheet.getLastRow() - 1, 1).getValues().flat();
-      if (existingReferences.includes(data.nroReferencia)) {
-        throw new Error('El número de referencia ya existe en esta partición.');
-      }
+      existingReferences = partitionSheet
+        .getRange(2, 10, partitionSheet.getLastRow() - 1, 1)
+        .getValues()
+        .flat();
     }
-
+    if (existingReferences.includes(data.nroReferencia)) {
+      throw new Error('El número de referencia ya existe en esta partición.');
+    }
+    const facturaArray = facturaCsv.split(',');
     const todosLosVendedores = this.dataFetcher.fetchAllVendedoresFromSheet();
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
@@ -468,11 +512,12 @@ class CobranzaService {
       const recordsWithMeta = values.map((row, index) => ({
         data: row,
         sheetName: sheetName,
-        rowIndex: index + 2
+        rowIndex: index + 2 // El índice real de la fila en su hoja
       }));
       allRecords.push(...recordsWithMeta);
     }
     
+    // Ordenar todos los registros por timestamp descendente
     allRecords.sort((a, b) => new Date(b.data[0]).getTime() - new Date(a.data[0]).getTime());
 
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
@@ -550,6 +595,8 @@ class CobranzaService {
     return 'Registro eliminado y archivado con éxito.';
   }
 }
+
+// Reportes PDF
 
 class ReportService {
   constructor(dataFetcher) { this.dataFetcher = dataFetcher; }
@@ -859,7 +906,7 @@ function setApiQueries() {
     WHERE cc.cod_tip = 'FACT' 
       AND cc.cod_cli = '{safeCodCliente}' 
       AND cc.cod_ven = '{safeCodVendedor}' 
-      AND cc.mon_sal > 0
+      
       ORDER BY cc.fec_ini DESC`;
   props.setProperty('FACTURAS_QUERY', facturasQuery);
 
@@ -869,7 +916,7 @@ function setApiQueries() {
    FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
 
-  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli   FROM cuentas_cobrar   WHERE cod_tip = 'FACT'     AND cod_ven = '{codVendedor}'   GROUP BY cod_cli ) SELECT cf.cod_cli AS CodCliente,       c.nom_cli  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
+  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli   FROM cuentas_cobrar   WHERE cod_tip = 'FACT'     AND cod_ven = '{codVendedor}'   GROUP BY cod_cli ) SELECT cf.cod_cli AS Cod_Cliente,       c.nom_cli  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
 
   const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
@@ -901,4 +948,7 @@ function crearTriggerConservarPropiedades() {
     .everyDays(1)
     .create();
 }
+
+
+ 
 // #endregion
