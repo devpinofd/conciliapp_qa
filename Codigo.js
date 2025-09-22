@@ -345,7 +345,7 @@ class CobranzaService {
         throw new Error(`No tiene vendedores asignados. Por favor, contacte al administrador.`);
       }
       let optionsHtml = isAdmin ? '<option value="Mostrar todos">Mostrar todos</option>' : '';
-      optionsHtml += vendedores.map(v => `<option value="${v.codigo}">${v.nombre} </option>`).join('');
+      optionsHtml += vendedores.map(v => `<option value="${v.codigo}">${v.nombre} (${v.sucursal})</option>`).join('');
       return optionsHtml;
     };
     if (forceRefresh) {
