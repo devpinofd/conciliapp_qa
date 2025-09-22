@@ -148,7 +148,7 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
       'Nro. de Referencia', 'Tipo de Cobro', 'Fecha de la Transferencia o Pago',
-      'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal']
+      'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal','id_registro']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
   'Registros Eliminados': {
@@ -457,7 +457,10 @@ class CobranzaService {
     const vendedorEncontrado = todosLosVendedores.find(v => v.codigo === data.vendedor);
     const nombreCompletoVendedor = vendedorEncontrado ? vendedorEncontrado.nombre : data.vendedor;
     const sucursal = vendedorEncontrado ? vendedorEncontrado.sucursal : '';
-
+ // --- INICIO DE LA MODIFICACIÓN ---
+    // Generar un ID único para el registro
+    const id_registro = new Date().getTime().toString(36) + Math.random().toString(36).substring(2, 9);
+    // --- FIN DE LA MODIFICACIÓN ---
     const row = [
       submissionDate,
       nombreCompletoVendedor,
@@ -476,7 +479,8 @@ class CobranzaService {
       data.estadoAnalista || '',
       data.comentarioAnalista || '',
       data.analistaAsignado || '',
-      sucursal
+      sucursal,
+      id_registro
     ];
 
     partitionSheet.appendRow(row);
@@ -598,21 +602,34 @@ class CobranzaService {
 
 // Reportes PDF
 
+
 class ReportService {
   constructor(dataFetcher) { this.dataFetcher = dataFetcher; }
+  
   getRecordsInDateRange(userEmail, vendedorFiltro, start, end) {
-    // Esta función necesitaría ser adaptada para leer de todas las particiones,
-    // por ahora se mantiene la lógica original que lee de 'Respuestas'.
-    const sheet = SheetManager.getSheet('Respuestas');
-    const lastRow = sheet.getLastRow();
-    if (lastRow <= 1) return [];
-    const values = sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).getValues();
-    const inRange = values.filter(row => {
-      const ts = new Date(row[0]).getTime();
-      return ts >= start.getTime() && ts <= end.getTime();
-    });
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+    const allSheets = ss.getSheets();
+    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
+
+    const partitionSheets = allSheets
+      .map(s => s.getName())
+      .filter(name => partitionRegex.test(name));
+
+    let allRecords = [];
+    for (const sheetName of partitionSheets) {
+      const sheet = ss.getSheetByName(sheetName);
+      if (sheet.getLastRow() <= 1) continue;
+      const values = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+      const recordsInRange = values.filter(row => {
+        const ts = new Date(row[0]).getTime();
+        return ts >= start.getTime() && ts <= end.getTime();
+      });
+      allRecords.push(...recordsInRange);
+    }
+    
     const isAdmin = this.dataFetcher.isUserAdmin(userEmail);
-    let filtered = inRange;
+    let filtered = allRecords;
+
     if (isAdmin) {
       if (vendedorFiltro && vendedorFiltro !== 'Mostrar todos') {
         const todos = this.dataFetcher.fetchAllVendedoresFromSheet();
@@ -624,23 +641,29 @@ class ReportService {
       const misVendedores = this.dataFetcher.fetchVendedoresFromSheetByUser(userEmail).map(v => v.nombre);
       filtered = filtered.filter(row => misVendedores.includes(row[1]));
     }
+
+    const tz = Session.getScriptTimeZone();
     return filtered.map(row => ({
-      fecha: Utilities.formatDate(new Date(row[0]), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'),
-      vendedor: row[1],
-      clienteCodigo: row[2],
-      clienteNombre: row[3],
-      factura: row[4],
-      monto: (typeof row[5] === 'number') ? row[5].toFixed(2) : row[5],
-      formaPago: row[6],
-      bancoEmisor: row[7],
-      bancoReceptor: row[8],
-      referencia: row[9],
-      tipoCobro: row[10],
-      fechaPago: row[11],
-      observaciones: row[12],
-      creadoPor: row[13],
+      // Fecha de creación/timestamp (col A) para la primera columna del reporte
+      fecha: Utilities.formatDate(new Date(row[0]), tz, 'dd/MM/yyyy HH:mm'),
+      vendedor: String(row[1] ?? ''),
+      clienteCodigo: String(row[2] ?? ''),
+      clienteNombre: String(row[3] ?? ''),
+      factura: String(row[4] ?? ''),
+      monto: (typeof row[5] === 'number') ? row[5].toFixed(2) : String(row[5] ?? ''),
+      formaPago: String(row[6] ?? ''),
+      bancoEmisor: String(row[7] ?? ''),
+      bancoReceptor: String(row[8] ?? ''),
+      referencia: String(row[9] ?? ''),
+      tipoCobro: String(row[10] ?? ''),
+      // Fecha del pago (col L)
+      fechaPago: row[11] ? Utilities.formatDate(new Date(row[11]), tz, 'dd/MM/yyyy') : '',
+      // FORZAR A STRING PARA EVITAR .trim is not a function
+      observaciones: String(row[12] ?? ''),
+      creadoPor: String(row[13] ?? ''),
     }));
   }
+
   buildPdf(records, meta) {
     const template = HtmlService.createTemplateFromFile('Report');
     template.records = records;
@@ -651,6 +674,8 @@ class ReportService {
     return blob;
   }
 }
+
+
 // #endregion
 
 // #region API pública Apps Script
@@ -758,25 +783,40 @@ function descargarRegistrosPDF(token, vendedorFiltro) {
   return withAuth(token, (user) => {
     try {
       const tz = Session.getScriptTimeZone();
+      
+      // --- INICIO DE LA CORRECCIÓN ---
       const now = new Date();
-      const end = new Date(Utilities.formatDate(now, tz, 'yyyy/MM/dd 23:59:59'));
-      const y = new Date(now);
-      y.setDate(now.getDate() - 1);
-      const start = new Date(Utilities.formatDate(y, tz, 'yyyy/MM/dd 00:00:00'));
+      
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+
+      const start = new Date(now);
+      start.setDate(start.getDate() - 1);
+      start.setHours(0, 0, 0, 0);
+      
+      Logger.log(`Buscando registros para PDF desde: ${start.toISOString()} hasta: ${end.toISOString()}`);
+      // --- FIN DE LA CORRECCIÓN ---
+
       const reportService = new ReportService(new DataFetcher());
       const records = reportService.getRecordsInDateRange(user.email, vendedorFiltro, start, end);
+      
+      Logger.log(`Encontrados ${records.length} registros para el PDF.`);
+
       const meta = {
         user,
         rangeLabel: `desde ${Utilities.formatDate(start, tz, 'dd/MM/yyyy HH:mm')} hasta ${Utilities.formatDate(end, tz, 'dd/MM/yyyy HH:mm')}`,
-        filename: `Registros_${Utilities.formatDate(y, tz, 'yyyyMMdd')}_${Utilities.formatDate(now, tz, 'yyyyMMdd')}.pdf`
+        filename: `Registros_${Utilities.formatDate(start, tz, 'yyyyMMdd')}_${Utilities.formatDate(end, tz, 'yyyyMMdd')}.pdf`,
+        generatedDate: Utilities.formatDate(now, tz, 'dd/MM/yyyy HH:mm')
       };
+
       const pdf = reportService.buildPdf(records, meta);
+      
       return {
         filename: meta.filename,
         base64: Utilities.base64Encode(pdf.getBytes())
       };
     } catch (e) {
-      Logger.error(`Error en descargarRegistrosPDF: ${e.message}`);
+      Logger.error(`Error en descargarRegistrosPDF: ${e.message} en la línea ${e.lineNumber}`);
       throw e;
     }
   });
@@ -906,7 +946,7 @@ function setApiQueries() {
     WHERE cc.cod_tip = 'FACT' 
       AND cc.cod_cli = '{safeCodCliente}' 
       AND cc.cod_ven = '{safeCodVendedor}' 
-      
+      AND cc.mon_sal>0
       ORDER BY cc.fec_ini DESC`;
   props.setProperty('FACTURAS_QUERY', facturasQuery);
 
@@ -916,7 +956,7 @@ function setApiQueries() {
    FROM vendedores v JOIN sucursales s ON s.cod_suc = v.cod_suc;`;
   props.setProperty('VENDEDORES_QUERY', vendedoresQuery);
 
-  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli   FROM cuentas_cobrar   WHERE cod_tip = 'FACT'     AND cod_ven = '{codVendedor}'   GROUP BY cod_cli ) SELECT cf.cod_cli AS Cod_Cliente,       c.nom_cli  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli;`;
+  const clientesQuery = `WITH clientes_filtrados AS (  SELECT cod_cli   FROM cuentas_cobrar   WHERE cod_tip = 'FACT'     AND cod_ven = '{codVendedor}'   GROUP BY cod_cli ) SELECT cf.cod_cli AS Cod_Cliente,       c.nom_cli  AS Nombre FROM clientes_filtrados cf JOIN clientes c ON c.cod_cli = cf.cod_cli order by 2 asc;`;
   props.setProperty('CLIENTES_QUERY', clientesQuery);
 
   const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;

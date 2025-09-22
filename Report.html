@@ -5,82 +5,21 @@
   <title>Registros - <?= meta.rangeLabel ?></title>
   <style>
     @page { size: A4; margin: 14mm 10mm; }
-    :root {
-      --fz-base: 11px;
-      --fz-small: 10px;
-      --pad-cell-y: 2px;
-      --pad-cell-x: 4px;
-    }
+    :root { --fz-base: 11px; --fz-small: 10px; --pad-cell-y: 2px; --pad-cell-x: 4px; }
     * { box-sizing: border-box; }
-    body {
-      font-family: Arial, sans-serif;
-      font-size: var(--fz-base);
-      line-height: 1.15;
-      color: #0f172a;
-      margin: 0;
-      padding: 0;
-    }
-    h1 {
-      margin: 0 0 4px 0;
-      font-size: 16px;
-      line-height: 1.2;
-    }
-    .meta {
-      font-size: var(--fz-small);
-      color: #475569;
-      margin: 0 0 8px 0;
-    }
-    table {
-      border-collapse: collapse;
-      width: 100%;
-      font-size: var(--fz-small);
-      line-height: 1.15;
-      table-layout: fixed;
-    }
-    th, td {
-      border: 1px solid #d9dde3;
-      padding: var(--pad-cell-y) var(--pad-cell-x);
-      vertical-align: top;
-    }
-    th {
-      background: #eef1f5;
-      text-align: left;
-      font-weight: 600;
-      font-size: var(--fz-small);
-    }
-    tbody tr {
-      page-break-inside: avoid;
-    }
-    tfoot td {
-      font-weight: 600;
-      background: #f3f5f7;
-    }
+    body { font-family: Arial, sans-serif; font-size: var(--fz-base); line-height: 1.15; color: #0f172a; margin: 0; padding: 0; }
+    h1 { margin: 0 0 4px 0; font-size: 16px; line-height: 1.2; }
+    .meta { font-size: var(--fz-small); color: #475569; margin: 0 0 8px 0; }
+    table { border-collapse: collapse; width: 100%; font-size: var(--fz-small); line-height: 1.15; table-layout: fixed; }
+    th, td { border: 1px solid #d9dde3; padding: var(--pad-cell-y) var(--pad-cell-x); vertical-align: top; }
+    th { background: #eef1f5; text-align: left; font-weight: 600; font-size: var(--fz-small); }
+    tbody tr { page-break-inside: avoid; }
+    tfoot td { font-weight: 600; background: #f3f5f7; }
     .right { text-align: right; }
     .muted { color: #64748b; font-size: 9px; }
-    .empty {
-      border: 1px solid #d9dde3;
-      padding: 10px;
-      text-align: center;
-      color: #64748b;
-      font-size: var(--fz-small);
-      margin-top: 8px;
-    }
+    .empty { border: 1px solid #d9dde3; padding: 10px; text-align: center; color: #64748b; font-size: var(--fz-small); margin-top: 8px; }
     .wrap { white-space: normal; word-break: break-word; }
-    .obs {
-      white-space: normal;
-      word-break: break-word;
-      overflow: hidden;
-    }
-    /* Si deseas truncar Observaciones a X líneas, descomenta:
-    .obs {
-      display: -webkit-box;
-      -webkit-line-clamp: 3;
-      -webkit-box-orient: vertical;
-    } */
-    /* Opcional: condensar aún más (descomentar)
-    body, table { font-size: 10px; }
-    th, td { padding: 1px 3px; }
-    */
+    .obs { white-space: normal; word-break: break-word; overflow: hidden; }
   </style>
 </head>
 <body>
@@ -88,11 +27,10 @@
   <div class="meta">
     Rango: <?= meta.rangeLabel ?><br>
     Usuario: <?= meta.user.name ?> (<?= meta.user.email ?>)<br>
-    Generado: <?= Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm') ?>
+    Generado: <?= meta.generatedDate ?>
   </div>
 
   <?
-    // Helpers en JavaScript para el template (HtmlService)
     function normalizeMoneyToNumber(val) {
       if (typeof val === 'number') return val;
       var s = String(val || '').trim();
@@ -140,12 +78,6 @@
     function formatMoney(val) {
       return numberToEsVE(normalizeMoneyToNumber(val));
     }
-    // Opcional: truncar observaciones largas (descomentar si se desea)
-    // function shorten(text, max) {
-    //   if (!text) return '';
-    //   text = String(text).trim();
-    //   return text.length > max ? text.slice(0, max) + '…' : text;
-    // }
   ?>
 
   <? if (!records || records.length === 0) { ?>
@@ -171,7 +103,8 @@
         <? records.forEach(function(r){
              var montoNum = normalizeMoneyToNumber(r.monto);
              total += montoNum;
-             var obs = (r.observaciones || '').trim();
+             // CORRECCIÓN ROBUSTA: convertir a string antes de trim
+             var obs = (r.observaciones == null ? '' : String(r.observaciones)).trim();
         ?>
           <tr>
             <td><?= r.fecha ?></td>
