@@ -27,6 +27,9 @@
 </head>
 <body>
     <div id="notification" class="notification"></div>
+    <div id="update-notification" class="notification info">
+        Nuevos registros de cobranza disponibles. <a href="#" id="refresh-link">Refrescar Datos.</a>.
+    </div>
     <div id="loading-spinner" class="loading-spinner-container"><div class="spinner"></div></div>
 
     <div class="app-container">
@@ -45,18 +48,40 @@
             <main class="card-body">
                 <div class="form-grid">
                     <div class="form-grid-item">
+                        <label for="filtro-sucursal">Sucursal:</label>
+                        <select id="filtro-sucursal" name="filtro-sucursal" disabled>
+                            <option value="TODAS">Cargando...</option>
+                        </select>
+                    </div>
+                    <div class="form-grid-item">
+                        <label for="filtro-fecha">Fecha:</label>
+                        <input type="date" id="filtro-fecha" name="filtro-fecha">
+                    </div>
+                    <div class="form-grid-item">
+                        <label for="filtro-vendedor">Vendedor:</label>
+                        <select id="filtro-vendedor" name="filtro-vendedor" disabled>
+                            <option value="TODOS">Cargando...</option>
+                        </select>
+                    </div>
+                    <div class="form-grid-item">
+                        <label for="filtro-cliente">Cliente:</label>
+                        <select id="filtro-cliente" name="filtro-cliente" disabled>
+                            <option value="TODOS">Cargando...</option>
+                        </select>
+                    </div>
+                    <div class="form-grid-item">
+                        <label for="filtro-banco">Banco Receptor:</label>
+                        <select id="filtro-banco" name="filtro-banco" disabled>
+                            <option value="TODOS">Cargando...</option>
+                        </select>
+                    </div>
+                    <div class="form-grid-item">
                         <label for="filtro-estado">Estado del Registro:</label>
                         <select id="filtro-estado" name="filtro-estado">
                             <option value="Pendiente" selected>Pendiente</option>
                             <option value="Procesado">Procesado</option>
                             <option value="Rechazado">Rechazado</option>
                             <option value="Todos">Todos</option>
-                        </select>
-                    </div>
-                    <div class="form-grid-item">
-                        <label for="filtro-sucursal">Sucursal:</label>
-                        <select id="filtro-sucursal" name="filtro-sucursal" disabled>
-                            <option value="TODAS">Cargando...</option>
                         </select>
                     </div>
                 </div>
@@ -152,6 +177,18 @@
         </div>
     </div>
 
+    <!-- Modal de Confirmación Genérico -->
+    <div id="confirm-action-modal" class="modal">
+        <div class="modal-content modal-content-small">
+            <h3 id="confirm-modal-title">Confirmar Acción</h3>
+            <p id="confirm-modal-text">¿Está seguro?</p>
+            <div class="modal-buttons">
+                <button id="cancel-confirm-btn" class="button button-secondary">Cancelar</button>
+                <button id="confirm-action-btn" class="button button-primary">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const webAppUrl = "<?!= url ?>";
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
@@ -164,10 +201,19 @@
             tableBody: document.getElementById('registros-table-body'),
             filterStatus: document.getElementById('filtro-estado'),
             filterBranch: document.getElementById('filtro-sucursal'),
+            filterDate: document.getElementById('filtro-fecha'),
+            filterVendedor: document.getElementById('filtro-vendedor'),
+            filterCliente: document.getElementById('filtro-cliente'),
+            filterBanco: document.getElementById('filtro-banco'),
             refreshBtn: document.getElementById('refresh-data-btn'),
             logoutButton: document.getElementById('logout-button'),
             toggleLoading(show) { this.loadingSpinner.style.display = show ? 'flex' : 'none'; },
-            showNotification(message, type = 'success') { this.notification.textContent = message; this.notification.className = `notification ${type} visible`; setTimeout(() => this.notification.classList.remove('visible'), 4000); }
+            showNotification(message, type = 'success') { 
+                this.notification.textContent = message;
+                this.notification.className = `notification ${type}`;
+                this.notification.classList.add('visible');
+                setTimeout(() => this.notification.classList.remove('visible'), 4000); 
+            }
         };
 
         const DB_NAME = 'AnalystData';
@@ -224,7 +270,6 @@
         }
 
         function renderTable(records) {
-            console.log("Renderizando tabla con estos registros:", JSON.stringify(records));
             ui.tableBody.innerHTML = '';
             if (!records || records.length === 0) {
                 ui.recordsStatus.textContent = 'No se encontraron registros.';
@@ -233,16 +278,30 @@
             }
             ui.recordsStatus.style.display = 'none';
 
-            const filters = { status: ui.filterStatus.value, branch: ui.filterBranch.value };
-            console.log("Aplicando filtros:", JSON.stringify(filters));
-
+            const filters = {
+                status: ui.filterStatus.value,
+                branch: ui.filterBranch.value,
+                date: ui.filterDate.value,
+                vendedor: ui.filterVendedor.value,
+                cliente: ui.filterCliente.value,
+                banco: ui.filterBanco.value
+            };
             const filteredRecords = records.filter(record => {
                 const statusVal = record.EstadoRegistro || 'Pendiente';
                 const sucursalVal = record.Sucursal;
+                const vendedorVal = record.Vendedor;
+                const clienteVal = record['Nombre Cliente'];
+                const bancoVal = record['Banco Receptor'];
+                const fechaVal = record.Timestamp ? new Date(record.Timestamp).toISOString().split('T')[0] : '';
+
                 const statusMatch = (filters.status === 'Todos' || statusVal === filters.status);
                 const branchMatch = (filters.branch === 'TODAS' || sucursalVal === filters.branch);
-                console.log(`Evaluando registro ID ${record['ID Registro']}: Sucursal='${sucursalVal}', Estado='${statusVal}'. Filtro Sucursal='${filters.branch}', Filtro Estado='${filters.status}'. Coincide=${statusMatch && branchMatch}`);
-                return statusMatch && branchMatch;
+                const dateMatch = (filters.date === '' || fechaVal === filters.date);
+                const vendedorMatch = (filters.vendedor === 'TODOS' || vendedorVal === filters.vendedor);
+                const clienteMatch = (filters.cliente === 'TODOS' || clienteVal === filters.cliente);
+                const bancoMatch = (filters.banco === 'TODOS' || bancoVal === filters.banco);
+
+                return statusMatch && branchMatch && dateMatch && vendedorMatch && clienteMatch && bancoMatch;
             });
 
             if (filteredRecords.length === 0) {
@@ -257,10 +316,9 @@
                 const fechaRegistro = record.Timestamp ? new Date(record.Timestamp).toLocaleDateString('es-VE') : 'N/A';
                 const fechaPago = record['Fecha de la Transferencia o Pago'] ? new Date(record['Fecha de la Transferencia o Pago']).toLocaleDateString('es-VE') : 'N/A';
                 const estadoClass = `status-${String(record.EstadoRegistro || 'pendiente').toLowerCase()}`;
-
-                let dropdownItemsHtml = '';
                 const dropdownId = `dropdown-${record.recordIdentifier.replace(/[^a-zA-Z0-9]/g, '-')}`;
 
+                let dropdownItemsHtml = '';
                 if (record.EstadoRegistro === 'Pendiente') {
                     dropdownItemsHtml = `
                         <button class="dropdown-item btn-process" data-identifier='${record.recordIdentifier}' title="Marcar este registro como Procesado">
@@ -331,7 +389,6 @@
 
             try {
                 const freshRecords = await runGoogleScript('getRecordsForAnalyst', sessionToken, { status: 'Todos', branch: 'TODAS' });
-                console.log('Respuesta del servidor (freshRecords):', JSON.stringify(freshRecords));
                 await saveRecordsToDB(freshRecords);
                 renderTable(freshRecords);
                 ui.showNotification('Datos actualizados desde el servidor.', 'success');
@@ -372,8 +429,93 @@
                 ui.filterBranch.innerHTML = '<option value="TODAS">Error al cargar</option>';
             }
         }
+
+        async function populateVendedorFilter() {
+            try {
+                const vendedores = await runGoogleScript('getVendedoresDisponibles', sessionToken);
+                ui.filterVendedor.innerHTML = '<option value="TODOS">Todos los vendedores</option>';
+                if (vendedores && vendedores.length > 0) {
+                    vendedores.forEach(vendedor => {
+                        ui.filterVendedor.innerHTML += `<option value="${vendedor}">${vendedor}</option>`;
+                    });
+                    ui.filterVendedor.disabled = false;
+                } else {
+                     ui.filterVendedor.innerHTML += '<option value="NINGUNO">No hay vendedores</option>';
+                }
+            } catch (error) {
+                ui.showNotification('Error al cargar vendedores: ' + error.message, 'error');
+                ui.filterVendedor.innerHTML = '<option value="TODOS">Error al cargar</option>';
+            }
+        }
+
+        async function populateClienteFilter() {
+            try {
+                const clientes = await runGoogleScript('getClientesDisponibles', sessionToken);
+                ui.filterCliente.innerHTML = '<option value="TODOS">Todos los clientes</option>';
+                if (clientes && clientes.length > 0) {
+                    clientes.forEach(cliente => {
+                        ui.filterCliente.innerHTML += `<option value="${cliente}">${cliente}</option>`;
+                    });
+                    ui.filterCliente.disabled = false;
+                } else {
+                     ui.filterCliente.innerHTML += '<option value="NINGUNO">No hay clientes</option>';
+                }
+            } catch (error) {
+                ui.showNotification('Error al cargar clientes: ' + error.message, 'error');
+                ui.filterCliente.innerHTML = '<option value="TODOS">Error al cargar</option>';
+            }
+        }
+
+        async function populateBancoReceptorFilter() {
+            try {
+                const bancos = await runGoogleScript('getBancosReceptoresDisponibles', sessionToken);
+                ui.filterBanco.innerHTML = '<option value="TODOS">Todos los bancos</option>';
+                if (bancos && bancos.length > 0) {
+                    bancos.forEach(banco => {
+                        ui.filterBanco.innerHTML += `<option value="${banco}">${banco}</option>`;
+                    });
+                    ui.filterBanco.disabled = false;
+                } else {
+                     ui.filterBanco.innerHTML += '<option value="NINGUNO">No hay bancos</option>';
+                }
+            } catch (error) {
+                ui.showNotification('Error al cargar bancos: ' + error.message, 'error');
+                ui.filterBanco.innerHTML = '<option value="TODOS">Error al cargar</option>';
+            }
+        }
         
+        let clientTimestamp = new Date().getTime().toString();
+
+        function pollForUpdates() {
+            console.log('DEBUG: Iniciando ciclo de sondeo (polling).');
+            setInterval(async () => {
+                console.log(`DEBUG: Realizando sondeo con clientTimestamp: ${clientTimestamp}`);
+                try {
+                    const result = await runGoogleScript('checkForUpdates', sessionToken, clientTimestamp);
+                    console.log('DEBUG: Resultado del sondeo:', result);
+                    console.log(`DEBUG: Tipo de result.newUpdates: ${typeof result.newUpdates}, Valor: ${result.newUpdates}`);
+                    if (result.newUpdates) {
+                        console.log('DEBUG: Entrando al bloque if para mostrar la notificación.');
+                        const notificationElement = document.getElementById('update-notification');
+                        notificationElement.classList.add('visible');
+                        console.log('DEBUG: Estilo del elemento de notificación después del cambio:', notificationElement.style.cssText);
+                        clientTimestamp = result.serverTimestamp;
+                    } else {
+                        console.log('DEBUG: No se encontraron nuevas actualizaciones.');
+                    }
+                } catch (error) {
+                    console.error('Error polling for updates:', error);
+                }
+            }, 30000); // Poll every 30 seconds
+        }
+
         function setupEventListeners() {
+            document.getElementById('refresh-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                document.getElementById('update-notification').classList.remove('visible');
+                loadRecords(true);
+            });
+
             ui.logoutButton.addEventListener('click', () => {
                 localStorage.removeItem('sessionToken');
                 window.top.location.href = webAppUrl;
@@ -382,13 +524,13 @@
             ui.refreshBtn.addEventListener('click', () => loadRecords(true));
             ui.filterStatus.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
             ui.filterBranch.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
-
+            ui.filterDate.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
+            ui.filterVendedor.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
+            ui.filterCliente.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
+            ui.filterBanco.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
+            // Listener para abrir el menú
             ui.tableBody.addEventListener('click', (event) => {
-                const target = event.target;
-                const kebabButton = target.closest('.kebab-button');
-                const actionButton = target.closest('.dropdown-item');
-
-                // 1. Manejar clic en el botón de menú (kebab)
+                const kebabButton = event.target.closest('.kebab-button');
                 if (kebabButton) {
                     const dropdownId = kebabButton.dataset.dropdownId;
                     const dropdown = document.getElementById(dropdownId);
@@ -404,39 +546,49 @@
                         dropdown.style.left = `${rect.left - dropdown.offsetWidth + rect.width}px`;
                         dropdown.classList.add('visible');
                     }
-                    return; // Terminar aquí si solo se abrió/cerró el menú
                 }
+            });
 
-                // 2. Manejar clic en un item de acción dentro del menú
+            // Listener global para acciones y para cerrar el menú
+            document.addEventListener('click', (event) => {
+                const target = event.target;
+                const actionButton = target.closest('.dropdown-item');
+                const visibleDropdown = document.querySelector('.actions-dropdown.visible');
+
+                // 1. Si se hace clic en un botón de acción
                 if (actionButton) {
-                    document.querySelectorAll('.actions-dropdown.visible').forEach(d => d.classList.remove('visible'));
+                    if (visibleDropdown) visibleDropdown.classList.remove('visible');
                     
                     const identifier = actionButton.dataset.identifier;
                     if (!identifier) return;
 
                     if (actionButton.classList.contains('btn-process')) {
-                        if (confirm('¿Está seguro de que desea marcar este registro como "Procesado"?')) {
+                        showConfirmModal('¿Está seguro de que desea marcar este registro como "Procesado"?', () => {
                             handleAction(identifier, 'Procesado');
-                        }
+                        });
                     }
                     if (actionButton.classList.contains('btn-reject')) {
                         openRejectionModal(identifier);
                     }
                     if (actionButton.classList.contains('btn-reopen')) {
-                        if (confirm('¿Está seguro de que desea reabrir este registro y devolverlo a \"Pendiente\"?')) {
+                        showConfirmModal('¿Está seguro de que desea reabrir este registro y devolverlo a "Pendiente"?', () => {
                             handleAction(identifier, 'Pendiente');
-                        }
+                        });
                     }
+                    return;
+                }
+
+                // 2. Si se hace clic fuera del menú, cerrarlo
+                if (visibleDropdown && !target.closest('.kebab-button')) {
+                    visibleDropdown.classList.remove('visible');
                 }
             });
 
-            window.addEventListener('click', (event) => {
-                if (!event.target.closest('.actions-menu-container')) {
-                    document.querySelectorAll('.actions-dropdown.visible').forEach(d => d.classList.remove('visible'));
-                }
-            });
-
+            // --- Lógica para Modales ---
             const rejectionModal = document.getElementById('rejection-modal');
+            const confirmActionModal = document.getElementById('confirm-action-modal');
+
+            // Modal de Rechazo
             const confirmRejectionBtn = document.getElementById('confirm-rejection-btn');
             const cancelRejectionBtn = document.getElementById('cancel-rejection-btn');
             const rejectionReasonText = document.getElementById('rejection-reason');
@@ -462,10 +614,35 @@
                     ui.showNotification('Debe proporcionar un motivo para rechazar.', 'error');
                 }
             });
-            window.addEventListener('click', (event) => {
-                if (event.target == rejectionModal) {
-                    closeRejectionModal();
+
+            // Modal de Confirmación Genérico
+            const confirmActionBtn = document.getElementById('confirm-action-btn');
+            const cancelConfirmBtn = document.getElementById('cancel-confirm-btn');
+            const confirmModalText = document.getElementById('confirm-modal-text');
+            let onConfirmCallback = null;
+
+            function showConfirmModal(message, onConfirm) {
+                confirmModalText.textContent = message;
+                onConfirmCallback = onConfirm;
+                confirmActionModal.style.display = 'flex';
+            }
+            function closeConfirmModal() {
+                confirmActionModal.style.display = 'none';
+                onConfirmCallback = null;
+            }
+
+            cancelConfirmBtn.addEventListener('click', closeConfirmModal);
+            confirmActionBtn.addEventListener('click', () => {
+                if (typeof onConfirmCallback === 'function') {
+                    onConfirmCallback();
                 }
+                closeConfirmModal();
+            });
+
+            // Cerrar modales al hacer clic fuera
+            window.addEventListener('click', (event) => {
+                if (event.target == rejectionModal) closeRejectionModal();
+                if (event.target == confirmActionModal) closeConfirmModal();
             });
         }
 
@@ -474,7 +651,11 @@
             await openDB();
             setupEventListeners();
             await populateBranchFilter();
+            await populateVendedorFilter();
+            await populateClienteFilter();
+            await populateBancoReceptorFilter();
             await loadRecords();
+            pollForUpdates();
             if (user.role === 'Admin') {
                 initializeAdminView();
             }

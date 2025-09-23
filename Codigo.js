@@ -159,6 +159,7 @@ SheetManager.SHEET_CONFIG = {
       'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal','id_registro']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
+  'Auditoria_Analistas': { headers: ['Timestamp', 'Analista', 'ID Registro', 'Estado Anterior', 'Estado Nuevo', 'Comentario'] },
   'Registros Eliminados': {
     headers: ['Fecha Eliminación', 'Usuario que Eliminó', 'Timestamp', 'Vendedor',
       'Codigo Cliente', 'Nombre Cliente', 'Factura', 'Monto Pagado',
@@ -493,6 +494,13 @@ class CobranzaService {
 
     partitionSheet.appendRow(row);
     Logger.log(`Formulario enviado por ${userEmail} a la partición ${partitionName}. Facturas: ${facturaCsv}`);
+
+    // Notificar a la vista de analista que hay una actualización
+    const scriptCache = CacheService.getScriptCache();
+    const newTimestamp = new Date().getTime().toString();
+    scriptCache.put('lastUpdateTimestamp', newTimestamp, 21600); // Cache por 6 horas
+    Logger.log(`DEBUG: Se estableció lastUpdateTimestamp en: ${newTimestamp}`);
+
     return '¡Datos recibidos con éxito!';
   }
 
@@ -978,53 +986,136 @@ function getRecordsForAnalyst(token, filters) {
  * @param {string|null} comment El comentario (requerido para rechazos).
  * @returns {string} Mensaje de confirmación.
  */
+
+// function updateRecordStatus(token, identifier, newStatus, comment) {
+//     return withAuth(token, (user) => {
+//         if (user.role !== 'Analista' && user.role !== 'Admin') {
+//             throw new Error('Acceso denegado.');
+//         }
+//         if (!['Procesado', 'Rechazado', 'Pendiente'].includes(newStatus)) {
+//             throw new Error('Estado no válido.');
+//         }
+//         if (newStatus === 'Rechazado' && (!comment || comment.trim() === '')) {
+//             throw new Error('Se requiere un comentario para rechazar un registro.');
+//         }
+
+//         const { sheet: sheetName, row: rowIndex } = JSON.parse(identifier);
+//         if (!sheetName || !rowIndex) {
+//             throw new Error('Identificador de registro inválido.');
+//         }
+
+//         const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
+//         if (!sheet) {
+//             throw new Error(`Hoja de partición '${sheetName}' no encontrada.`);
+//         }
+
+//         const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
+//         const statusCol = headers.indexOf('EstadoAnalista') + 1;
+//         const commentCol = headers.indexOf('ComentarioAnalista') + 1;
+//         const analystCol = headers.indexOf('AnalistaAsignado') + 1;
+
+//         if (statusCol === 0 || commentCol === 0 || analystCol === 0) {
+//             throw new Error('Columnas de estado/comentario no configuradas.');
+//         }
+        
+//         // Verificación de seguridad: Asegurarse de que el analista solo modifique lo suyo (admin puede todo)
+//         const assignedAnalyst = sheet.getRange(rowIndex, analystCol).getValue();
+//         if (user.role === 'Analista' && normalizeEmail(assignedAnalyst) !== normalizeEmail(user.email)) {
+//             throw new Error('No tiene permiso para modificar un registro que no le fue asignado.');
+//         }
+
+//         sheet.getRange(rowIndex, statusCol).setValue(newStatus);
+        
+//         // Si se revierte a Pendiente, limpiar el comentario. Si se rechaza, guardarlo.
+//         if (newStatus === 'Pendiente') {
+//             sheet.getRange(rowIndex, commentCol).setValue('');
+//         } else if (comment) {
+//             sheet.getRange(rowIndex, commentCol).setValue(comment);
+//         }
+
+//         Logger.log(`Registro en ${sheetName}, fila ${rowIndex} actualizado a ${newStatus} por ${user.email}`);
+//         return `Registro actualizado a "${newStatus}" con éxito.`;
+//     });
+// }
+
+
+/**
+ * Actualiza el estado de un registro de cobranza y registra la acción en una hoja de auditoría.
+ * @param {string} token El token de sesión.
+ * @param {string} identifier El identificador JSON del registro (hoja y fila).
+ * @param {string} newStatus El nuevo estado ('Procesado', 'Rechazado', 'Pendiente').
+ * @param {string|null} comment El comentario (requerido para rechazos).
+ * @returns {string} Mensaje de confirmación.
+ */
 function updateRecordStatus(token, identifier, newStatus, comment) {
     return withAuth(token, (user) => {
+        // --- Validación de permisos y datos de entrada ---
         if (user.role !== 'Analista' && user.role !== 'Admin') {
-            throw new Error('Acceso denegado.');
+            throw new Error('Acceso denegado. Se requiere rol de Analista o Administrador.');
         }
         if (!['Procesado', 'Rechazado', 'Pendiente'].includes(newStatus)) {
-            throw new Error('Estado no válido.');
+            throw new Error('El estado proporcionado no es válido.');
         }
         if (newStatus === 'Rechazado' && (!comment || comment.trim() === '')) {
             throw new Error('Se requiere un comentario para rechazar un registro.');
         }
 
+        // --- Deserialización y validación del identificador del registro ---
         const { sheet: sheetName, row: rowIndex } = JSON.parse(identifier);
         if (!sheetName || !rowIndex) {
-            throw new Error('Identificador de registro inválido.');
+            throw new Error('El identificador del registro es inválido o está corrupto.');
         }
 
         const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
         if (!sheet) {
-            throw new Error(`Hoja de partición '${sheetName}' no encontrada.`);
+            throw new Error(`La hoja de partición '${sheetName}' no fue encontrada.`);
         }
 
+        // --- Mapeo de columnas para evitar errores por cambios en la estructura ---
         const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
         const statusCol = headers.indexOf('EstadoAnalista') + 1;
         const commentCol = headers.indexOf('ComentarioAnalista') + 1;
         const analystCol = headers.indexOf('AnalistaAsignado') + 1;
+        const idRegistroCol = headers.indexOf('id_registro') + 1;
 
-        if (statusCol === 0 || commentCol === 0 || analystCol === 0) {
-            throw new Error('Columnas de estado/comentario no configuradas.');
+        if ([statusCol, commentCol, analystCol, idRegistroCol].includes(0)) {
+            throw new Error('Una o más columnas críticas (Estado, Comentario, Analista, ID) no están configuradas en la hoja de respuestas.');
         }
-        
-        // Verificación de seguridad: Asegurarse de que el analista solo modifique lo suyo (admin puede todo)
+
+        // --- Verificación de seguridad: El analista solo modifica sus registros asignados (Admin puede todo) ---
         const assignedAnalyst = sheet.getRange(rowIndex, analystCol).getValue();
         if (user.role === 'Analista' && normalizeEmail(assignedAnalyst) !== normalizeEmail(user.email)) {
-            throw new Error('No tiene permiso para modificar un registro que no le fue asignado.');
+            throw new Error('No tiene permiso para modificar un registro que no le ha sido asignado.');
         }
 
+        // --- INICIO DE LA LÓGICA DE AUDITORÍA ---
+        // 1. Obtener el estado actual y el ID del registro ANTES de modificarlo.
+        const currentStatus = sheet.getRange(rowIndex, statusCol).getValue() || 'Pendiente';
+        const recordId = sheet.getRange(rowIndex, idRegistroCol).getValue();
+
+        // 2. Registrar la acción en la hoja de auditoría de analistas.
+        const auditSheet = SheetManager.getSheet('Auditoria_Analistas');
+        auditSheet.appendRow([
+            new Date(),                      // Timestamp de la acción
+            user.email,                      // Analista que realiza el cambio
+            recordId,                        // ID único del registro afectado
+            currentStatus,                   // Estado anterior
+            newStatus,                       // Nuevo estado
+            comment || ''                    // Comentario asociado (si existe)
+        ]);
+        // --- FIN DE LA LÓGICA DE AUDITORÍA ---
+
+        // --- Actualización del registro ---
         sheet.getRange(rowIndex, statusCol).setValue(newStatus);
         
-        // Si se revierte a Pendiente, limpiar el comentario. Si se rechaza, guardarlo.
+        // Limpiar o establecer el comentario según el nuevo estado.
         if (newStatus === 'Pendiente') {
             sheet.getRange(rowIndex, commentCol).setValue('');
         } else if (comment) {
             sheet.getRange(rowIndex, commentCol).setValue(comment);
         }
 
-        Logger.log(`Registro en ${sheetName}, fila ${rowIndex} actualizado a ${newStatus} por ${user.email}`);
+        Logger.log(`Registro ${recordId} en ${sheetName} (fila ${rowIndex}) actualizado de "${currentStatus}" a "${newStatus}" por ${user.email}.`);
         return `Registro actualizado a "${newStatus}" con éxito.`;
     });
 }
@@ -1061,6 +1152,47 @@ function getSucursalesDisponibles(token) {
         }
 
         return []; // Otros roles no ven sucursales
+    });
+}
+
+function getVendedoresDisponibles(token) {
+    return withAuth(token, (user) => {
+        const records = getRecordsForAnalyst(token, { status: 'Todos', branch: 'TODAS' });
+        const vendedores = [...new Set(records.map(r => r.Vendedor).filter(v => v))];
+        return vendedores.sort();
+    });
+}
+
+function getClientesDisponibles(token) {
+    return withAuth(token, (user) => {
+        const records = getRecordsForAnalyst(token, { status: 'Todos', branch: 'TODAS' });
+        const clientes = [...new Set(records.map(r => r['Nombre Cliente']).filter(c => c))];
+        return clientes.sort();
+    });
+}
+
+function getBancosReceptoresDisponibles(token) {
+    return withAuth(token, (user) => {
+        const records = getRecordsForAnalyst(token, { status: 'Todos', branch: 'TODAS' });
+        const bancos = [...new Set(records.map(r => r['Banco Receptor']).filter(b => b))];
+        return bancos.sort();
+    });
+}
+
+function checkForUpdates(token, clientTimestamp) {
+    return withAuth(token, (user) => {
+        const scriptCache = CacheService.getScriptCache();
+        const serverTimestamp = scriptCache.get('lastUpdateTimestamp');
+        
+        Logger.log(`DEBUG: checkForUpdates - clientTimestamp: ${clientTimestamp}, serverTimestamp: ${serverTimestamp}`);
+        
+        const newUpdates = serverTimestamp && Number(serverTimestamp) > Number(clientTimestamp);
+        Logger.log(`DEBUG: checkForUpdates - newUpdates: ${newUpdates}`);
+
+        return {
+            newUpdates: newUpdates,
+            serverTimestamp: serverTimestamp
+        };
     });
 }
 
