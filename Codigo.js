@@ -499,7 +499,6 @@ class CobranzaService {
     const scriptCache = CacheService.getScriptCache();
     const newTimestamp = new Date().getTime().toString();
     scriptCache.put('lastUpdateTimestamp', newTimestamp, 21600); // Cache por 6 horas
-    Logger.log(`DEBUG: Se estableció lastUpdateTimestamp en: ${newTimestamp}`);
 
     return '¡Datos recibidos con éxito!';
   }
@@ -1184,10 +1183,7 @@ function checkForUpdates(token, clientTimestamp) {
         const scriptCache = CacheService.getScriptCache();
         const serverTimestamp = scriptCache.get('lastUpdateTimestamp');
         
-        Logger.log(`DEBUG: checkForUpdates - clientTimestamp: ${clientTimestamp}, serverTimestamp: ${serverTimestamp}`);
-        
         const newUpdates = serverTimestamp && Number(serverTimestamp) > Number(clientTimestamp);
-        Logger.log(`DEBUG: checkForUpdates - newUpdates: ${newUpdates}`);
 
         return {
             newUpdates: newUpdates,

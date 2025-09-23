@@ -487,21 +487,13 @@
         let clientTimestamp = new Date().getTime().toString();
 
         function pollForUpdates() {
-            console.log('DEBUG: Iniciando ciclo de sondeo (polling).');
             setInterval(async () => {
-                console.log(`DEBUG: Realizando sondeo con clientTimestamp: ${clientTimestamp}`);
                 try {
                     const result = await runGoogleScript('checkForUpdates', sessionToken, clientTimestamp);
-                    console.log('DEBUG: Resultado del sondeo:', result);
-                    console.log(`DEBUG: Tipo de result.newUpdates: ${typeof result.newUpdates}, Valor: ${result.newUpdates}`);
                     if (result.newUpdates) {
-                        console.log('DEBUG: Entrando al bloque if para mostrar la notificación.');
                         const notificationElement = document.getElementById('update-notification');
                         notificationElement.classList.add('visible');
-                        console.log('DEBUG: Estilo del elemento de notificación después del cambio:', notificationElement.style.cssText);
                         clientTimestamp = result.serverTimestamp;
-                    } else {
-                        console.log('DEBUG: No se encontraron nuevas actualizaciones.');
                     }
                 } catch (error) {
                     console.error('Error polling for updates:', error);
