@@ -151,6 +151,7 @@ SheetManager.SHEET_CONFIG = {
   'Administradores': { headers: ['correo_admin'] },
   'Bancos': { headers: ['Nombre del Banco'] },
   'analista': { headers: ['sucursal', 'codigousuario', 'email'] },
+  'AsignacionOverrides': { headers: ['codvendedor', 'analista_email'] },
   'Respuestas': {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
@@ -726,132 +727,146 @@ function getAvailableAnalysts() {
  */
 function assignPendingRecords() {
   const lock = LockService.getScriptLock();
-  // Esperar máximo 30 segundos para obtener el bloqueo para evitar ejecuciones concurrentes.
   if (!lock.tryLock(30000)) {
     Logger.log('assignPendingRecords ya está en ejecución. Omitiendo esta llamada.');
     return;
   }
 
   try {
-    Logger.log('Iniciando assignPendingRecords...');
-    const analystMap = getAvailableAnalysts();
-    if (analystMap.size === 0) {
+    Logger.log('Iniciando proceso de asignación de 2 etapas (Overrides + Reparto Justo)...');
+    const allAnalystData = getAvailableAnalysts();
+    if (allAnalystData.size === 0) {
       Logger.log('No hay analistas disponibles para asignar registros.');
       return;
     }
 
+    // 1. Obtener reglas de override y crear un mapa de consulta rápida
+    const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
+    const overrideData = overrideSheet.getLastRow() > 1 ? overrideSheet.getRange(2, 1, overrideSheet.getLastRow() - 1, 2).getValues() : [];
+    const overrideMap = new Map(overrideData.map(([sellerCode, analystEmail]) => [String(sellerCode).trim(), normalizeEmail(analystEmail)]));
+    Logger.log(`${overrideMap.size} reglas de override cargadas.`);
+
+    // 2. Crear mapa inverso (Vendedor -> Codigo) para buscar overrides
+    const dataFetcher = new DataFetcher();
+    const allSellers = dataFetcher.fetchAllVendedoresFromSheet();
+    const sellerNameToCodeMap = new Map(allSellers.map(seller => [seller.nombre, seller.codigo]));
+
+    // 3. Recolectar todos los registros pendientes
     const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
     const allSheets = ss.getSheets();
     const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
-    
     const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
-    const analystColIndex = headers.indexOf('AnalistaAsignado'); // 16
-    const statusColIndex = headers.indexOf('EstadoAnalista'); // 14
-    const sucursalColIndex = headers.indexOf('Sucursal'); // 17
-    const vendedorColIndex = headers.indexOf('Vendedor'); // 1
+    const analystColIndex = headers.indexOf('AnalistaAsignado');
+    const statusColIndex = headers.indexOf('EstadoAnalista');
+    const sucursalColIndex = headers.indexOf('Sucursal');
+    const vendedorColIndex = headers.indexOf('Vendedor');
 
-    if (analystColIndex === -1 || statusColIndex === -1 || sucursalColIndex === -1) {
-        Logger.error('No se encontraron las columnas necesarias (AnalistaAsignado, EstadoAnalista, Sucursal) en la configuración.');
-        return;
-    }
-
-    let pendingRecords = [];
-
-    // 1. Recolectar registros pendientes de todas las particiones
+    let allPendingRecords = [];
     allSheets.forEach(sheet => {
       const sheetName = sheet.getName();
       if (!partitionRegex.test(sheetName) || sheet.getLastRow() <= 1) return;
-
       const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
       data.forEach((row, index) => {
-        const isAssigned = row[analystColIndex] && String(row[analystColIndex]).trim() !== '';
-        const status = String(row[statusColIndex] || '').trim();
-        // Solo procesar si no está asignado y el estado está vacío (o 'Pendiente', si se define así)
-        if (!isAssigned && status === '') {
-          pendingRecords.push({
-            sheetName: sheetName,
-            rowIndex: index + 2, // Fila real en la hoja
-            timestamp: new Date(row[0]),
-            sucursal: String(row[sucursalColIndex] || '').trim(),
-            vendedor: String(row[vendedorColIndex] || '').trim(),
-            row: row
+        if (!row[analystColIndex] && !row[statusColIndex]) {
+          const sellerName = String(row[vendedorColIndex] || '').trim();
+          allPendingRecords.push({ 
+              sheetName, 
+              rowIndex: index + 2, 
+              sucursal: String(row[sucursalColIndex] || '').trim(),
+              sellerName: sellerName,
+              sellerCode: sellerNameToCodeMap.get(sellerName) || null
           });
         }
       });
     });
 
-    if (pendingRecords.length === 0) {
+    if (allPendingRecords.length === 0) {
       Logger.log('No hay registros pendientes para asignar.');
       return;
     }
 
-    // 2. Ordenar los registros para una distribución justa
-    pendingRecords.sort((a, b) => {
-      const tsCompare = a.timestamp.getTime() - b.timestamp.getTime(); // Más antiguo primero
-      if (tsCompare !== 0) return tsCompare;
-      const sucCompare = a.sucursal.localeCompare(b.sucursal);
-      if (sucCompare !== 0) return sucCompare;
-      return a.vendedor.localeCompare(b.vendedor);
-    });
-
-    // 3. Distribuir registros (Round Robin con filtro de sucursal)
-    const analysts = Array.from(analystMap.keys());
-    let analystIndex = 0;
-    const updates = new Map(); // Mapa para agrupar actualizaciones por hoja
-
-    pendingRecords.forEach(record => {
-      let assigned = false;
-      let initialAnalystIndex = analystIndex; // Para evitar bucles infinitos
-
-      while (!assigned) {
-        const analystEmail = analysts[analystIndex];
-        const analystSucursales = analystMap.get(analystEmail);
-
-        const hasAllAccess = analystSucursales.includes('TODAS');
-        const recordHasBranch = record.sucursal && record.sucursal.length > 0;
-        let canHandleSucursal;
-
-        if (hasAllAccess) {
-            canHandleSucursal = true; // Un analista con 'TODAS' puede gestionar cualquier registro.
-        } else if (recordHasBranch) {
-            canHandleSucursal = analystSucursales.includes(record.sucursal);
+    // 4. Separar registros: los que tienen override y los que van a reparto justo
+    const recordsForFairShare = [];
+    const directAssignments = [];
+    allPendingRecords.forEach(record => {
+        if (record.sellerCode && overrideMap.has(record.sellerCode)) {
+            const designatedAnalyst = overrideMap.get(record.sellerCode);
+            directAssignments.push({ ...record, assignedAnalyst: designatedAnalyst });
         } else {
-            canHandleSucursal = false; // Un analista de sucursal específica no puede gestionar registros sin sucursal.
+            recordsForFairShare.push(record);
         }
-
-        if (canHandleSucursal) {
-          if (!updates.has(record.sheetName)) {
-            updates.set(record.sheetName, []);
-          }
-          updates.get(record.sheetName).push({
-            rowIndex: record.rowIndex,
-            analyst: analystEmail
-          });
-          
-          assigned = true;
-        }
-        
-        analystIndex = (analystIndex + 1) % analysts.length;
-        if (analystIndex === initialAnalystIndex && !assigned) {
-          // Se dio una vuelta completa y ningún analista pudo tomar el registro
-          Logger.log(`No se encontró analista para el registro en la sucursal ${record.sucursal}. Se omitirá por ahora.`);
-          break; // Salir del while y pasar al siguiente registro
-        }
-      }
     });
 
-    // 4. Aplicar actualizaciones en batch
-    updates.forEach((sheetUpdates, sheetName) => {
-      const sheet = ss.getSheetByName(sheetName);
-      Logger.log(`Aplicando ${sheetUpdates.length} actualizaciones a la hoja ${sheetName}`);
-      sheetUpdates.forEach(update => {
-        // Columna 17 es AnalistaAsignado (índice + 1)
-        sheet.getRange(update.rowIndex, analystColIndex + 1).setValue(update.analyst);
-      });
-    });
+    const updates = new Map();
 
-    SpreadsheetApp.flush(); // Forzar la aplicación de todos los cambios pendientes.
-    Logger.log(`Proceso de asignación completado. ${pendingRecords.length} registros evaluados.`);
+    // 5. Procesar asignaciones directas (override)
+    if (directAssignments.length > 0) {
+        Logger.log(`Procesando ${directAssignments.length} asignaciones directas por override.`);
+        directAssignments.forEach(record => {
+            if (!updates.has(record.sheetName)) updates.set(record.sheetName, []);
+            updates.get(record.sheetName).push({ rowIndex: record.rowIndex, analyst: record.assignedAnalyst });
+        });
+    }
+
+    // 6. Procesar el resto con el reparto justo por sucursal
+    if (recordsForFairShare.length > 0) {
+        Logger.log(`Procesando ${recordsForFairShare.length} registros por reparto justo.`);
+        const recordsByBranch = recordsForFairShare.reduce((acc, record) => {
+            const branch = record.sucursal || 'SIN_SUCURSAL';
+            if (!acc[branch]) acc[branch] = [];
+            acc[branch].push(record);
+            return acc;
+        }, {});
+
+        const analystsWithAllAccess = Array.from(allAnalystData.entries()).filter(([, sucursales]) => sucursales.includes('TODAS')).map(([email]) => email);
+        const analystsByBranch = {};
+        allAnalystData.forEach((sucursales, email) => {
+            sucursales.forEach(sucursal => {
+                if (sucursal !== 'TODAS') {
+                    if (!analystsByBranch[sucursal]) analystsByBranch[sucursal] = [];
+                    analystsByBranch[sucursal].push(email);
+                }
+            });
+        });
+
+        const scriptCache = CacheService.getScriptCache();
+        for (const branch in recordsByBranch) {
+            const recordsToAssign = recordsByBranch[branch];
+            const specificAnalysts = analystsByBranch[branch] || [];
+            const qualifiedAnalysts = [...new Set([...specificAnalysts, ...analystsWithAllAccess])];
+
+            if (qualifiedAnalysts.length === 0) {
+                Logger.log(`No se encontraron analistas para la sucursal '${branch}' en reparto justo. ${recordsToAssign.length} registros serán omitidos.`);
+                continue;
+            }
+
+            let lastIndexCacheKey = `last_analyst_index_${branch}`;
+            let lastAssignedIndex = parseInt(scriptCache.get(lastIndexCacheKey) || '-1', 10);
+
+            recordsToAssign.forEach(record => {
+                const nextAnalystIndex = (lastAssignedIndex + 1) % qualifiedAnalysts.length;
+                const assignedAnalyst = qualifiedAnalysts[nextAnalystIndex];
+                if (!updates.has(record.sheetName)) updates.set(record.sheetName, []);
+                updates.get(record.sheetName).push({ rowIndex: record.rowIndex, analyst: assignedAnalyst });
+                lastAssignedIndex = nextAnalystIndex;
+            });
+            scriptCache.put(lastIndexCacheKey, lastAssignedIndex.toString(), 21600);
+        }
+    }
+
+    // 7. Aplicar todas las actualizaciones en batch
+    if (updates.size > 0) {
+        updates.forEach((sheetUpdates, sheetName) => {
+            const sheet = ss.getSheetByName(sheetName);
+            Logger.log(`Aplicando ${sheetUpdates.length} actualizaciones a la hoja ${sheetName}`);
+            sheetUpdates.forEach(update => {
+                sheet.getRange(update.rowIndex, analystColIndex + 1).setValue(update.analyst);
+            });
+        });
+        SpreadsheetApp.flush();
+    }
+    
+    Logger.log(`Proceso de asignación de 2 etapas completado. ${allPendingRecords.length} registros evaluados.`);
 
   } catch (e) {
     Logger.error(`Error fatal en assignPendingRecords: ${e.message} \nStack: ${e.stack}`);
@@ -1034,7 +1049,7 @@ function getSucursalesDisponibles(token) {
         if (user.role === 'Analista') {
             // Analista ve sus sucursales asignadas
             const analystMap = getAvailableAnalysts();
-            const sucursales = analystMap.get(user.email.toLowerCase()) || [];
+            const sucursales = analystMap.get(normalizeEmail(user.email)) || [];
             if (sucursales.includes('TODAS')) {
                 // Si tiene 'TODAS', devolver todas las sucursales existentes
                 const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
@@ -1046,6 +1061,78 @@ function getSucursalesDisponibles(token) {
         }
 
         return []; // Otros roles no ven sucursales
+    });
+}
+
+// --- Funciones para la UI de Administración de Overrides ---
+
+function getOverrideData(token) {
+    return withAuth(token, (user) => {
+        if (user.role !== 'Admin') throw new Error('Acceso denegado.');
+
+        // 1. Obtener todos los vendedores
+        const dataFetcher = new DataFetcher();
+        const allSellers = dataFetcher.fetchAllVendedoresFromSheet();
+
+        // 2. Obtener todos los analistas
+        const allAnalysts = Array.from(getAvailableAnalysts().keys());
+
+        // 3. Obtener las reglas de override actuales
+        const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
+        const overrideData = overrideSheet.getLastRow() > 1 ? overrideSheet.getRange(2, 1, overrideSheet.getLastRow() - 1, 2).getValues() : [];
+        const currentRules = overrideData.map(([sellerCode, analystEmail]) => ({
+            sellerCode: String(sellerCode).trim(),
+            analystEmail: normalizeEmail(analystEmail)
+        }));
+
+        return { allSellers, allAnalysts, currentRules };
+    });
+}
+
+function addOverrideRule(token, sellerCode, analystEmail) {
+    return withAuth(token, (user) => {
+        if (user.role !== 'Admin') throw new Error('Acceso denegado.');
+        if (!sellerCode || !analystEmail) throw new Error('Se requieren el código de vendedor y el email del analista.');
+
+        const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
+        const lastRow = overrideSheet.getLastRow();
+        const sellerCodes = overrideSheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+
+        const rowIndex = sellerCodes.indexOf(sellerCode);
+
+        if (rowIndex !== -1) {
+            // Si el vendedor ya existe, actualiza el analista
+            overrideSheet.getRange(rowIndex + 2, 2).setValue(analystEmail);
+            Logger.log(`Regla de override actualizada por ${user.email}: Vendedor ${sellerCode} -> Analista ${analystEmail}`);
+            return "Regla actualizada con éxito.";
+        } else {
+            // Si no existe, añade una nueva fila
+            overrideSheet.appendRow([sellerCode, analystEmail]);
+            Logger.log(`Nueva regla de override creada por ${user.email}: Vendedor ${sellerCode} -> Analista ${analystEmail}`);
+            return "Nueva regla creada con éxito.";
+        }
+    });
+}
+
+function deleteOverrideRule(token, sellerCode) {
+    return withAuth(token, (user) => {
+        if (user.role !== 'Admin') throw new Error('Acceso denegado.');
+        if (!sellerCode) throw new Error('Se requiere el código de vendedor.');
+
+        const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
+        const lastRow = overrideSheet.getLastRow();
+        if (lastRow < 2) return "No hay reglas para eliminar.";
+
+        const sellerCodes = overrideSheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+        const rowIndex = sellerCodes.findIndex(code => String(code).trim() === sellerCode);
+
+        if (rowIndex !== -1) {
+            overrideSheet.deleteRow(rowIndex + 2);
+            Logger.log(`Regla de override eliminada por ${user.email} para el vendedor ${sellerCode}`);
+            return "Regla eliminada con éxito.";
+        } else {
+            throw new Error('No se encontró la regla para el vendedor especificado.');
+        }
     });
 }
 

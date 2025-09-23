@@ -97,6 +97,46 @@
                 </div>
             </main>
         </div>
+
+        <? if (user.role === 'Admin') { ?>
+        <div class="card">
+            <header class="card-header">
+                <h1>Gestión de Asignaciones Directas (Overrides)</h1>
+            </header>
+            <main class="card-body">
+                <div class="form-grid">
+                    <div class="form-grid-item">
+                        <label for="override-vendedor">Asignar Vendedor:</label>
+                        <select id="override-vendedor" name="override-vendedor"><option>Cargando...</option></select>
+                    </div>
+                    <div class="form-grid-item">
+                        <label for="override-analista">Al Analista:</label>
+                        <select id="override-analista" name="override-analista"><option>Cargando...</option></select>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button id="add-override-btn" class="button button-primary">Crear Regla</button>
+                </div>
+                <hr style="margin: 24px 0; border-color: #e2e8f0;">
+                <h3>Reglas Actuales</h3>
+                <div class="table-container">
+                    <table class="records-table">
+                        <thead>
+                            <tr>
+                                <th>Vendedor</th>
+                                <th>Analista Asignado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="override-rules-table-body">
+                            <!-- Las reglas se cargarán aquí -->
+                        </tbody>
+                    </table>
+                </div>
+            </main>
+        </div>
+        <? } ?>
+
     </div>
 
     <!-- Modal para Rechazo -->
@@ -130,7 +170,6 @@
             showNotification(message, type = 'success') { this.notification.textContent = message; this.notification.className = `notification ${type} visible`; setTimeout(() => this.notification.classList.remove('visible'), 4000); }
         };
 
-        // --- Lógica de IndexedDB (sin Service Worker) ---
         const DB_NAME = 'AnalystData';
         const DB_VERSION = 1;
         const OBJECT_STORE_NAME = 'records';
@@ -155,7 +194,7 @@
         }
 
         async function saveRecordsToDB(records) {
-            if (!records) return; // Guarda de seguridad para evitar errores con respuestas nulas
+            if (!records) return;
             const db = await openDB();
             const transaction = db.transaction(OBJECT_STORE_NAME, 'readwrite');
             const store = transaction.objectStore(OBJECT_STORE_NAME);
@@ -219,21 +258,23 @@
                 const fechaPago = record['Fecha de la Transferencia o Pago'] ? new Date(record['Fecha de la Transferencia o Pago']).toLocaleDateString('es-VE') : 'N/A';
                 const estadoClass = `status-${String(record.EstadoRegistro || 'pendiente').toLowerCase()}`;
 
-                let actionButtonsHtml = '';
+                let dropdownItemsHtml = '';
+                const dropdownId = `dropdown-${record.recordIdentifier.replace(/[^a-zA-Z0-9]/g, '-')}`;
+
                 if (record.EstadoRegistro === 'Pendiente') {
-                    actionButtonsHtml = `
-                        <button class="button button-primary btn-process" data-identifier='${record.recordIdentifier}' title="Marcar este registro como Procesado">
+                    dropdownItemsHtml = `
+                        <button class="dropdown-item btn-process" data-identifier='${record.recordIdentifier}' title="Marcar este registro como Procesado">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"></path></svg>
                             <span>Procesar</span>
                         </button>
-                        <button class="button button-danger btn-reject" data-identifier='${record.recordIdentifier}' title="Rechazar este registro">
+                        <button class="dropdown-item btn-reject" data-identifier='${record.recordIdentifier}' title="Rechazar este registro">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
                             <span>Rechazar</span>
                         </button>
                     `;
                 } else {
-                    actionButtonsHtml = `
-                        <button class="button button-secondary btn-reopen" data-identifier='${record.recordIdentifier}' title="Revertir este registro al estado Pendiente">
+                    dropdownItemsHtml = `
+                        <button class="dropdown-item btn-reopen" data-identifier='${record.recordIdentifier}' title="Revertir este registro al estado Pendiente">
                             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"></path></svg>
                             <span>Reabrir</span>
                         </button>
@@ -255,7 +296,14 @@
                     <td data-label="Sucursal">${record.Sucursal || 'N/A'}</td>
                     <td data-label="Estado"><span class="status-badge ${estadoClass}">${record.EstadoRegistro || 'Pendiente'}</span></td>
                     <td data-label="Acciones" class="action-buttons">
-                        ${actionButtonsHtml}
+                        <div class="actions-menu-container">
+                            <button class="kebab-button" title="Más opciones" data-dropdown-id="${dropdownId}">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"></path></svg>
+                            </button>
+                            <div class="actions-dropdown" id="${dropdownId}">
+                                ${dropdownItemsHtml}
+                            </div>
+                        </div>
                     </td>
                 `;
                 ui.tableBody.appendChild(tr);
@@ -283,7 +331,7 @@
 
             try {
                 const freshRecords = await runGoogleScript('getRecordsForAnalyst', sessionToken, { status: 'Todos', branch: 'TODAS' });
-                console.log('Respuesta del servidor (freshRecords):', JSON.stringify(freshRecords)); // Log para diagnóstico
+                console.log('Respuesta del servidor (freshRecords):', JSON.stringify(freshRecords));
                 await saveRecordsToDB(freshRecords);
                 renderTable(freshRecords);
                 ui.showNotification('Datos actualizados desde el servidor.', 'success');
@@ -325,7 +373,7 @@
             }
         }
         
-        async function setupEventListeners() {
+        function setupEventListeners() {
             ui.logoutButton.addEventListener('click', () => {
                 localStorage.removeItem('sessionToken');
                 window.top.location.href = webAppUrl;
@@ -337,40 +385,67 @@
 
             ui.tableBody.addEventListener('click', (event) => {
                 const target = event.target;
-                const identifier = target.dataset.identifier;
+                const kebabButton = target.closest('.kebab-button');
+                const actionButton = target.closest('.dropdown-item');
 
-                if (!identifier) return;
+                // 1. Manejar clic en el botón de menú (kebab)
+                if (kebabButton) {
+                    const dropdownId = kebabButton.dataset.dropdownId;
+                    const dropdown = document.getElementById(dropdownId);
+                    if (!dropdown) return;
 
-                if (target.classList.contains('btn-process')) {
-                    if (confirm('¿Está seguro de que desea marcar este registro como "Procesado"?')) {
-                        handleAction(identifier, 'Procesado');
+                    const isVisible = dropdown.classList.contains('visible');
+                    document.querySelectorAll('.actions-dropdown.visible').forEach(d => d.classList.remove('visible'));
+
+                    if (!isVisible) {
+                        document.body.appendChild(dropdown);
+                        const rect = kebabButton.getBoundingClientRect();
+                        dropdown.style.top = `${rect.bottom}px`;
+                        dropdown.style.left = `${rect.left - dropdown.offsetWidth + rect.width}px`;
+                        dropdown.classList.add('visible');
                     }
+                    return; // Terminar aquí si solo se abrió/cerró el menú
                 }
 
-                if (target.classList.contains('btn-reject')) {
-                    openRejectionModal(identifier);
-                }
+                // 2. Manejar clic en un item de acción dentro del menú
+                if (actionButton) {
+                    document.querySelectorAll('.actions-dropdown.visible').forEach(d => d.classList.remove('visible'));
+                    
+                    const identifier = actionButton.dataset.identifier;
+                    if (!identifier) return;
 
-                if (target.classList.contains('btn-reopen')) {
-                    if (confirm('¿Está seguro de que desea reabrir este registro y devolverlo a "Pendiente"?')) {
-                        handleAction(identifier, 'Pendiente');
+                    if (actionButton.classList.contains('btn-process')) {
+                        if (confirm('¿Está seguro de que desea marcar este registro como "Procesado"?')) {
+                            handleAction(identifier, 'Procesado');
+                        }
+                    }
+                    if (actionButton.classList.contains('btn-reject')) {
+                        openRejectionModal(identifier);
+                    }
+                    if (actionButton.classList.contains('btn-reopen')) {
+                        if (confirm('¿Está seguro de que desea reabrir este registro y devolverlo a \"Pendiente\"?')) {
+                            handleAction(identifier, 'Pendiente');
+                        }
                     }
                 }
             });
 
-            // Listeners para el nuevo modal de rechazo
+            window.addEventListener('click', (event) => {
+                if (!event.target.closest('.actions-menu-container')) {
+                    document.querySelectorAll('.actions-dropdown.visible').forEach(d => d.classList.remove('visible'));
+                }
+            });
+
             const rejectionModal = document.getElementById('rejection-modal');
             const confirmRejectionBtn = document.getElementById('confirm-rejection-btn');
             const cancelRejectionBtn = document.getElementById('cancel-rejection-btn');
             const rejectionReasonText = document.getElementById('rejection-reason');
-
             let currentIdentifierForRejection = null;
 
             function openRejectionModal(identifier) {
                 currentIdentifierForRejection = identifier;
                 rejectionModal.style.display = 'flex';
             }
-
             function closeRejectionModal() {
                 rejectionModal.style.display = 'none';
                 rejectionReasonText.value = '';
@@ -378,7 +453,6 @@
             }
 
             cancelRejectionBtn.addEventListener('click', closeRejectionModal);
-
             confirmRejectionBtn.addEventListener('click', () => {
                 const reason = rejectionReasonText.value.trim();
                 if (reason) {
@@ -388,7 +462,6 @@
                     ui.showNotification('Debe proporcionar un motivo para rechazar.', 'error');
                 }
             });
-
             window.addEventListener('click', (event) => {
                 if (event.target == rejectionModal) {
                     closeRejectionModal();
@@ -398,10 +471,90 @@
 
         async function initializeView() {
             console.log("Vista de Analista cargada para el usuario:", user);
-            await openDB(); // Abrir la DB al iniciar
+            await openDB();
             setupEventListeners();
             await populateBranchFilter();
             await loadRecords();
+            if (user.role === 'Admin') {
+                initializeAdminView();
+            }
+        }
+
+        async function initializeAdminView() {
+            const uiAdmin = {
+                vendedorSelect: document.getElementById('override-vendedor'),
+                analistaSelect: document.getElementById('override-analista'),
+                addBtn: document.getElementById('add-override-btn'),
+                rulesTableBody: document.getElementById('override-rules-table-body')
+            };
+
+            async function loadAdminData() {
+                ui.toggleLoading(true);
+                try {
+                    const data = await runGoogleScript('getOverrideData', sessionToken);
+                    uiAdmin.vendedorSelect.innerHTML = data.allSellers.map(s => `<option value="${s.codigo}">${s.nombre}</option>`).join('');
+                    uiAdmin.analistaSelect.innerHTML = data.allAnalysts.map(a => `<option value="${a}">${a}</option>`).join('');
+                    uiAdmin.rulesTableBody.innerHTML = '';
+                    if (data.currentRules.length > 0) {
+                        const sellerMap = new Map(data.allSellers.map(s => [s.codigo, s.nombre]));
+                        data.currentRules.forEach(rule => {
+                            const tr = document.createElement('tr');
+                            const sellerName = sellerMap.get(rule.sellerCode) || rule.sellerCode;
+                            tr.innerHTML = `
+                                <td data-label="Vendedor">${sellerName}</td>
+                                <td data-label="Analista Asignado">${rule.analystEmail}</td>
+                                <td data-label="Acciones">
+                                    <button class="button button-danger btn-delete-override" data-seller-code="${rule.sellerCode}">Eliminar</button>
+                                </td>
+                            `;
+                            uiAdmin.rulesTableBody.appendChild(tr);
+                        });
+                    }
+                } catch (error) {
+                    ui.showNotification('Error al cargar datos de admin: ' + error.message, 'error');
+                } finally {
+                    ui.toggleLoading(false);
+                }
+            }
+
+            uiAdmin.addBtn.addEventListener('click', async () => {
+                const sellerCode = uiAdmin.vendedorSelect.value;
+                const analystEmail = uiAdmin.analistaSelect.value;
+                if (!sellerCode || !analystEmail) {
+                    ui.showNotification('Por favor, seleccione un vendedor y un analista.', 'error');
+                    return;
+                }
+                ui.toggleLoading(true);
+                try {
+                    const result = await runGoogleScript('addOverrideRule', sessionToken, sellerCode, analystEmail);
+                    ui.showNotification(result, 'success');
+                    await loadAdminData();
+                } catch (error) {
+                    ui.showNotification('Error al crear regla: ' + error.message, 'error');
+                } finally {
+                    ui.toggleLoading(false);
+                }
+            });
+
+            uiAdmin.rulesTableBody.addEventListener('click', async (event) => {
+                if (event.target.classList.contains('btn-delete-override')) {
+                    const sellerCode = event.target.dataset.sellerCode;
+                    if (confirm(`¿Está seguro de que desea eliminar la regla para el vendedor ${sellerCode}?`)) {
+                        ui.toggleLoading(true);
+                        try {
+                            const result = await runGoogleScript('deleteOverrideRule', sessionToken, sellerCode);
+                            ui.showNotification(result, 'success');
+                            await loadAdminData();
+                        } catch (error) {
+                            ui.showNotification('Error al eliminar regla: ' + error.message, 'error');
+                        } finally {
+                            ui.toggleLoading(false);
+                        }
+                    }
+                }
+            });
+
+            await loadAdminData();
         }
 
         document.addEventListener('DOMContentLoaded', initializeView);

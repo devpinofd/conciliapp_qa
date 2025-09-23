@@ -229,4 +229,61 @@
         overflow-x: auto;
         width: 100%;
     }
+
+    /* Estilos para el Menú de Acciones (Kebab Menu) */
+    .actions-menu-container {
+        position: relative;
+    }
+    .kebab-button {
+        background: none;
+        border: none;
+        padding: 8px;
+        cursor: pointer;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .kebab-button:hover {
+        background-color: #f1f5f9;
+    }
+    .kebab-button svg {
+        width: 24px;
+        height: 24px;
+        fill: #64748b;
+    }
+    .actions-dropdown {
+        display: none;
+        position: fixed; /* Cambiado a fixed para flotar sobre todo */
+        background-color: var(--background-card);
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        z-index: 10;
+        width: 180px;
+        overflow: hidden;
+    }
+    .actions-dropdown.visible {
+        display: block;
+    }
+    .dropdown-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+        cursor: pointer;
+        font-size: 15px;
+        color: var(--text-light);
+        background: none;
+        border: none;
+        width: 100%;
+        text-align: left;
+    }
+    .dropdown-item:hover {
+        background-color: #f8fafc;
+    }
+    .dropdown-item svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
+    }
 </style>
