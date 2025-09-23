@@ -5,10 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Panel de Analista</title>
-    <!-- Se reutilizan los mismos estilos de Index.html para consistencia visual -->
     <?!= include('styles'); ?>
     <style>
-        /* Estilos específicos para la vista de analista */
         .status-badge {
             padding: 4px 8px;
             border-radius: 12px;
@@ -72,24 +70,45 @@
             </header>
             <main class="card-body">
                 <p id="records-status">Cargando registros...</p>
-                <table class="records-table">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Fecha</th>
-                            <th>Vendedor</th>
-                            <th>Cliente</th>
-                            <th>Monto</th>
-                            <th>Sucursal</th>
-                            <th>Estado</th>
-                            <th>Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody id="registros-table-body">
-                        <!-- Las filas de registros se cargarán aquí dinámicamente -->
-                    </tbody>
-                </table>
+                <div class="table-container">
+                    <table class="records-table">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Fecha Registro</th>
+                                <th>Vendedor</th>
+                                <th>Cliente</th>
+                                <th>Factura(s)</th>
+                                <th>Monto</th>
+                                <th>Forma de Pago</th>
+                                <th>Banco Emisor</th>
+                                <th>Banco Receptor</th>
+                                <th>Referencia</th>
+                                <th>Fecha Pago</th>
+                                <th>Sucursal</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody id="registros-table-body">
+                            <!-- Las filas de registros se cargarán aquí dinámicamente -->
+                        </tbody>
+                    </table>
+                </div>
             </main>
+        </div>
+    </div>
+
+    <!-- Modal para Rechazo -->
+    <div id="rejection-modal" class="modal">
+        <div class="modal-content">
+            <h3>Motivo del Rechazo</h3>
+            <p>Por favor, ingrese el motivo por el cual se rechaza este registro.</p>
+            <textarea id="rejection-reason" rows="4" style="width: 100%; margin-top: 10px;" placeholder="Ej: El número de referencia no coincide..."></textarea>
+            <div class="modal-buttons">
+                <button id="cancel-rejection-btn" class="button button-secondary">Cancelar</button>
+                <button id="confirm-rejection-btn" class="button button-danger">Confirmar Rechazo</button>
+            </div>
         </div>
     </div>
 
@@ -107,10 +126,57 @@
             filterBranch: document.getElementById('filtro-sucursal'),
             refreshBtn: document.getElementById('refresh-data-btn'),
             logoutButton: document.getElementById('logout-button'),
-            
             toggleLoading(show) { this.loadingSpinner.style.display = show ? 'flex' : 'none'; },
             showNotification(message, type = 'success') { this.notification.textContent = message; this.notification.className = `notification ${type} visible`; setTimeout(() => this.notification.classList.remove('visible'), 4000); }
         };
+
+        // --- Lógica de IndexedDB (sin Service Worker) ---
+        const DB_NAME = 'AnalystData';
+        const DB_VERSION = 1;
+        const OBJECT_STORE_NAME = 'records';
+        let db;
+
+        function openDB() {
+            if (db) return Promise.resolve(db);
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onerror = (event) => reject('Error al abrir IndexedDB: ' + event.target.error);
+                request.onupgradeneeded = (event) => {
+                    const tempDb = event.target.result;
+                    if (!tempDb.objectStoreNames.contains(OBJECT_STORE_NAME)) {
+                        tempDb.createObjectStore(OBJECT_STORE_NAME, { keyPath: 'recordIdentifier' });
+                    }
+                };
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    resolve(db);
+                };
+            });
+        }
+
+        async function saveRecordsToDB(records) {
+            if (!records) return; // Guarda de seguridad para evitar errores con respuestas nulas
+            const db = await openDB();
+            const transaction = db.transaction(OBJECT_STORE_NAME, 'readwrite');
+            const store = transaction.objectStore(OBJECT_STORE_NAME);
+            store.clear();
+            records.forEach(record => store.put(record));
+            return new Promise((resolve, reject) => {
+                transaction.oncomplete = () => resolve();
+                transaction.onerror = (event) => reject('Error al guardar en DB: ' + event.target.error);
+            });
+        }
+
+        async function getRecordsFromDB() {
+            const db = await openDB();
+            const transaction = db.transaction(OBJECT_STORE_NAME, 'readonly');
+            const store = transaction.objectStore(OBJECT_STORE_NAME);
+            const request = store.getAll();
+            return new Promise((resolve, reject) => {
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (event) => reject('Error al leer de DB: ' + event.target.error);
+            });
+        }
 
         function runGoogleScript(funcName, ...args) {
             return new Promise((resolve, reject) => {
@@ -119,53 +185,108 @@
         }
 
         function renderTable(records) {
+            console.log("Renderizando tabla con estos registros:", JSON.stringify(records));
             ui.tableBody.innerHTML = '';
             if (!records || records.length === 0) {
-                ui.recordsStatus.textContent = 'No se encontraron registros con los filtros seleccionados.';
+                ui.recordsStatus.textContent = 'No se encontraron registros.';
                 ui.recordsStatus.style.display = 'block';
                 return;
             }
             ui.recordsStatus.style.display = 'none';
 
-            records.forEach(record => {
+            const filters = { status: ui.filterStatus.value, branch: ui.filterBranch.value };
+            console.log("Aplicando filtros:", JSON.stringify(filters));
+
+            const filteredRecords = records.filter(record => {
+                const statusVal = record.EstadoRegistro || 'Pendiente';
+                const sucursalVal = record.Sucursal;
+                const statusMatch = (filters.status === 'Todos' || statusVal === filters.status);
+                const branchMatch = (filters.branch === 'TODAS' || sucursalVal === filters.branch);
+                console.log(`Evaluando registro ID ${record['ID Registro']}: Sucursal='${sucursalVal}', Estado='${statusVal}'. Filtro Sucursal='${filters.branch}', Filtro Estado='${filters.status}'. Coincide=${statusMatch && branchMatch}`);
+                return statusMatch && branchMatch;
+            });
+
+            if (filteredRecords.length === 0) {
+                ui.recordsStatus.textContent = 'No se encontraron registros con los filtros seleccionados.';
+                ui.recordsStatus.style.display = 'block';
+                return;
+            }
+
+            filteredRecords.forEach(record => {
                 const tr = document.createElement('tr');
-                const monto = typeof record['Monto Pagado'] === 'number'
-                    ? record['Monto Pagado'].toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    : record['Monto Pagado'];
-                
-                const fecha = record.Timestamp ? new Date(record.Timestamp).toLocaleDateString('es-VE') : 'N/A';
+                const monto = typeof record['Monto Pagado'] === 'number' ? record['Monto Pagado'].toLocaleString('es-VE', { minimumFractionDigits: 2 }) : record['Monto Pagado'];
+                const fechaRegistro = record.Timestamp ? new Date(record.Timestamp).toLocaleDateString('es-VE') : 'N/A';
+                const fechaPago = record['Fecha de la Transferencia o Pago'] ? new Date(record['Fecha de la Transferencia o Pago']).toLocaleDateString('es-VE') : 'N/A';
                 const estadoClass = `status-${String(record.EstadoRegistro || 'pendiente').toLowerCase()}`;
+
+                let actionButtonsHtml = '';
+                if (record.EstadoRegistro === 'Pendiente') {
+                    actionButtonsHtml = `
+                        <button class="button button-primary btn-process" data-identifier='${record.recordIdentifier}' title="Marcar este registro como Procesado">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"></path></svg>
+                            <span>Procesar</span>
+                        </button>
+                        <button class="button button-danger btn-reject" data-identifier='${record.recordIdentifier}' title="Rechazar este registro">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"></path></svg>
+                            <span>Rechazar</span>
+                        </button>
+                    `;
+                } else {
+                    actionButtonsHtml = `
+                        <button class="button button-secondary btn-reopen" data-identifier='${record.recordIdentifier}' title="Revertir este registro al estado Pendiente">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"></path></svg>
+                            <span>Reabrir</span>
+                        </button>
+                    `;
+                }
 
                 tr.innerHTML = `
                     <td data-label="ID">${record['ID Registro'] || 'N/A'}</td>
-                    <td data-label="Fecha">${fecha}</td>
+                    <td data-label="Fecha Registro">${fechaRegistro}</td>
                     <td data-label="Vendedor">${record.Vendedor || 'N/A'}</td>
                     <td data-label="Cliente">${record['Nombre Cliente'] || 'N/A'}</td>
+                    <td data-label="Factura(s)">${record.Factura || 'N/A'}</td>
                     <td data-label="Monto">${monto}</td>
+                    <td data-label="Forma de Pago">${record['Forma de Pago'] || 'N/A'}</td>
+                    <td data-label="Banco Emisor">${record['Banco Emisor'] || 'N/A'}</td>
+                    <td data-label="Banco Receptor">${record['Banco Receptor'] || 'N/A'}</td>
+                    <td data-label="Referencia">${record['Nro. de Referencia'] || 'N/A'}</td>
+                    <td data-label="Fecha Pago">${fechaPago}</td>
                     <td data-label="Sucursal">${record.Sucursal || 'N/A'}</td>
                     <td data-label="Estado"><span class="status-badge ${estadoClass}">${record.EstadoRegistro || 'Pendiente'}</span></td>
                     <td data-label="Acciones" class="action-buttons">
-                        <button class="button button-primary btn-process" data-identifier='${record.recordIdentifier}'>Procesar</button>
-                        <button class="button button-danger btn-reject" data-identifier='${record.recordIdentifier}'>Rechazar</button>
+                        ${actionButtonsHtml}
                     </td>
                 `;
                 ui.tableBody.appendChild(tr);
             });
         }
 
-        async function loadRecords() {
+        async function loadRecords(forceRefresh = false) {
             ui.toggleLoading(true);
             ui.recordsStatus.textContent = 'Cargando registros...';
-            ui.recordsStatus.style.display = 'block';
-            ui.tableBody.innerHTML = '';
+            
+            if (!forceRefresh) {
+                try {
+                    const cachedRecords = await getRecordsFromDB();
+                    if (cachedRecords && cachedRecords.length > 0) {
+                        renderTable(cachedRecords);
+                        ui.recordsStatus.textContent = 'Buscando actualizaciones...';
+                    } else {
+                        ui.recordsStatus.textContent = 'No hay datos locales. Buscando en el servidor...';
+                    }
+                } catch (error) {
+                    console.error('Error al leer de IndexedDB:', error);
+                    ui.recordsStatus.textContent = 'Error en caché local. Buscando en el servidor...';
+                }
+            }
 
             try {
-                const filters = {
-                    status: ui.filterStatus.value,
-                    branch: ui.filterBranch.value
-                };
-                const records = await runGoogleScript('getRecordsForAnalyst', sessionToken, filters);
-                renderTable(records);
+                const freshRecords = await runGoogleScript('getRecordsForAnalyst', sessionToken, { status: 'Todos', branch: 'TODAS' });
+                console.log('Respuesta del servidor (freshRecords):', JSON.stringify(freshRecords)); // Log para diagnóstico
+                await saveRecordsToDB(freshRecords);
+                renderTable(freshRecords);
+                ui.showNotification('Datos actualizados desde el servidor.', 'success');
             } catch (error) {
                 ui.recordsStatus.textContent = `Error al cargar registros: ${error.message}`;
                 ui.showNotification(`Error al cargar: ${error.message}`, 'error');
@@ -179,10 +300,9 @@
             try {
                 const result = await runGoogleScript('updateRecordStatus', sessionToken, identifier, newStatus, comment);
                 ui.showNotification(result, 'success');
-                await loadRecords(); // Recargar la tabla para ver el cambio
+                await loadRecords(true);
             } catch (error) {
                 ui.showNotification(`Error: ${error.message}`, 'error');
-            } finally {
                 ui.toggleLoading(false);
             }
         }
@@ -190,39 +310,30 @@
         async function populateBranchFilter() {
             try {
                 const branches = await runGoogleScript('getSucursalesDisponibles', sessionToken);
-                ui.filterBranch.innerHTML = ''; // Limpiar opciones
-                
-                if (user.role === 'Admin' || user.branch === 'TODAS') {
-                    ui.filterBranch.innerHTML += '<option value="TODAS">Todas las sucursales</option>';
-                }
-
+                ui.filterBranch.innerHTML = '<option value="TODAS">Todas las sucursales</option>';
                 if (branches && branches.length > 0) {
                     branches.forEach(branch => {
                         ui.filterBranch.innerHTML += `<option value="${branch}">${branch}</option>`;
                     });
                     ui.filterBranch.disabled = false;
-                } else if (user.role !== 'Admin' && user.branch !== 'TODAS') {
-                    // Si no tiene sucursales de la API pero sí en su perfil
-                    ui.filterBranch.innerHTML = `<option value="${user.branch}">${user.branch}</option>`;
                 } else {
-                    ui.filterBranch.innerHTML = '<option value="TODAS">No hay sucursales específicas</option>';
+                     ui.filterBranch.innerHTML += '<option value="NINGUNA">No hay sucursales</option>';
                 }
-                
             } catch (error) {
                 ui.showNotification('Error al cargar sucursales: ' + error.message, 'error');
                 ui.filterBranch.innerHTML = '<option value="TODAS">Error al cargar</option>';
             }
         }
         
-        function setupEventListeners() {
+        async function setupEventListeners() {
             ui.logoutButton.addEventListener('click', () => {
                 localStorage.removeItem('sessionToken');
                 window.top.location.href = webAppUrl;
             });
 
-            ui.refreshBtn.addEventListener('click', loadRecords);
-            ui.filterStatus.addEventListener('change', loadRecords);
-            ui.filterBranch.addEventListener('change', loadRecords);
+            ui.refreshBtn.addEventListener('click', () => loadRecords(true));
+            ui.filterStatus.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
+            ui.filterBranch.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
 
             ui.tableBody.addEventListener('click', (event) => {
                 const target = event.target;
@@ -237,18 +348,57 @@
                 }
 
                 if (target.classList.contains('btn-reject')) {
-                    const reason = prompt('Por favor, ingrese el motivo del rechazo:');
-                    if (reason && reason.trim() !== '') {
-                        handleAction(identifier, 'Rechazado', reason.trim());
-                    } else if (reason !== null) {
-                        ui.showNotification('Debe proporcionar un motivo para rechazar.', 'error');
+                    openRejectionModal(identifier);
+                }
+
+                if (target.classList.contains('btn-reopen')) {
+                    if (confirm('¿Está seguro de que desea reabrir este registro y devolverlo a "Pendiente"?')) {
+                        handleAction(identifier, 'Pendiente');
                     }
+                }
+            });
+
+            // Listeners para el nuevo modal de rechazo
+            const rejectionModal = document.getElementById('rejection-modal');
+            const confirmRejectionBtn = document.getElementById('confirm-rejection-btn');
+            const cancelRejectionBtn = document.getElementById('cancel-rejection-btn');
+            const rejectionReasonText = document.getElementById('rejection-reason');
+
+            let currentIdentifierForRejection = null;
+
+            function openRejectionModal(identifier) {
+                currentIdentifierForRejection = identifier;
+                rejectionModal.style.display = 'flex';
+            }
+
+            function closeRejectionModal() {
+                rejectionModal.style.display = 'none';
+                rejectionReasonText.value = '';
+                currentIdentifierForRejection = null;
+            }
+
+            cancelRejectionBtn.addEventListener('click', closeRejectionModal);
+
+            confirmRejectionBtn.addEventListener('click', () => {
+                const reason = rejectionReasonText.value.trim();
+                if (reason) {
+                    handleAction(currentIdentifierForRejection, 'Rechazado', reason);
+                    closeRejectionModal();
+                } else {
+                    ui.showNotification('Debe proporcionar un motivo para rechazar.', 'error');
+                }
+            });
+
+            window.addEventListener('click', (event) => {
+                if (event.target == rejectionModal) {
+                    closeRejectionModal();
                 }
             });
         }
 
         async function initializeView() {
             console.log("Vista de Analista cargada para el usuario:", user);
+            await openDB(); // Abrir la DB al iniciar
             setupEventListeners();
             await populateBranchFilter();
             await loadRecords();

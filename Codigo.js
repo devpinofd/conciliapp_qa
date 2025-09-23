@@ -66,6 +66,13 @@ class Logger {
   }
 }
 
+function normalizeEmail(email) {
+  if (!email || typeof email !== 'string') {
+    return '';
+  }
+  return email.trim().toLowerCase();
+}
+
 class CacheManager {
   static get(key, ttlSeconds, fetchFunction, ...args) {
     const cache = PropertiesService.getScriptProperties();
@@ -143,7 +150,7 @@ SheetManager.SHEET_CONFIG = {
   'obtenerVendedoresPorUsuario': { headers: ['correo', 'vendedorcompleto', 'codvendedor','Sucursal'] },
   'Administradores': { headers: ['correo_admin'] },
   'Bancos': { headers: ['Nombre del Banco'] },
-  'analista': { headers: ['sucursal', 'codigousuario'] },
+  'analista': { headers: ['sucursal', 'codigousuario', 'email'] },
   'Respuestas': {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
@@ -169,14 +176,14 @@ class DataFetcher {
       Logger.error('Se intentó llamar a fetchVendedoresFromSheetByUser sin un email.');
       return [];
     }
-    const normalizedUserEmail = userEmail.trim().toLowerCase();
+    const normalizedUserEmail = normalizeEmail(userEmail);
     const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
     const lastRow = sheet.getLastRow();
     if (lastRow < 2) return [];
     const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
     const vendedoresFiltrados = data
       .map(row => ({
-        email: String(row[0]).trim().toLowerCase(),
+        email: normalizeEmail(row[0]),
         nombre: String(row[1]).trim(),
         codigo: String(row[2]).trim(),
         sucursal: String(row[3]).trim()
@@ -200,11 +207,11 @@ class DataFetcher {
   }
   isUserAdmin(userEmail) {
     if (!userEmail) return false;
-    const normalizedUserEmail = userEmail.trim().toLowerCase();
+    const normalizedUserEmail = normalizeEmail(userEmail);
     const sheet = SheetManager.getSheet('Administradores');
     if (sheet.getLastRow() < 2) return false;
     const adminEmails = sheet.getRange("A2:A" + sheet.getLastRow()).getValues()
-      .flat().map(email => email.trim().toLowerCase());
+      .flat().map(email => normalizeEmail(email));
     return adminEmails.includes(normalizedUserEmail);
   }
     fetchClientesFromApi(codVendedor) {
@@ -675,6 +682,372 @@ class ReportService {
   }
 }
 
+
+// #endregion
+
+// #region Lógica de Analistas
+
+/**
+ * Obtiene un mapa de los analistas disponibles y las sucursales que tienen asignadas.
+ * @returns {Map<string, string[]>} Un mapa donde la clave es el email del analista y el valor es un array de sus sucursales.
+ */
+function getAvailableAnalysts() {
+  try {
+    const sheet = SheetManager.getSheet('analista');
+    if (sheet.getLastRow() < 2) {
+      Logger.log('No se encontraron analistas configurados en la hoja "analista".');
+      return new Map();
+    }
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+    const analystMap = new Map();
+
+    data.forEach(row => {
+      const sucursal = String(row[0] || '').trim();
+      const email = normalizeEmail(row[2]); // Usar la tercera columna (índice 2)
+
+      if (email && sucursal) {
+        if (!analystMap.has(email)) {
+          analystMap.set(email, []);
+        }
+        analystMap.get(email).push(sucursal);
+      }
+    });
+    Logger.log(`Analistas cargados: ${analystMap.size}`);
+    return analystMap;
+  } catch (e) {
+    Logger.error(`Error en getAvailableAnalysts: ${e.message}`);
+    return new Map();
+  }
+}
+
+/**
+ * Asigna registros pendientes a los analistas disponibles.
+ * Sigue una lógica de "fair queue" por fecha, sucursal y vendedor.
+ */
+function assignPendingRecords() {
+  const lock = LockService.getScriptLock();
+  // Esperar máximo 30 segundos para obtener el bloqueo para evitar ejecuciones concurrentes.
+  if (!lock.tryLock(30000)) {
+    Logger.log('assignPendingRecords ya está en ejecución. Omitiendo esta llamada.');
+    return;
+  }
+
+  try {
+    Logger.log('Iniciando assignPendingRecords...');
+    const analystMap = getAvailableAnalysts();
+    if (analystMap.size === 0) {
+      Logger.log('No hay analistas disponibles para asignar registros.');
+      return;
+    }
+
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+    const allSheets = ss.getSheets();
+    const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
+    
+    const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
+    const analystColIndex = headers.indexOf('AnalistaAsignado'); // 16
+    const statusColIndex = headers.indexOf('EstadoAnalista'); // 14
+    const sucursalColIndex = headers.indexOf('Sucursal'); // 17
+    const vendedorColIndex = headers.indexOf('Vendedor'); // 1
+
+    if (analystColIndex === -1 || statusColIndex === -1 || sucursalColIndex === -1) {
+        Logger.error('No se encontraron las columnas necesarias (AnalistaAsignado, EstadoAnalista, Sucursal) en la configuración.');
+        return;
+    }
+
+    let pendingRecords = [];
+
+    // 1. Recolectar registros pendientes de todas las particiones
+    allSheets.forEach(sheet => {
+      const sheetName = sheet.getName();
+      if (!partitionRegex.test(sheetName) || sheet.getLastRow() <= 1) return;
+
+      const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+      data.forEach((row, index) => {
+        const isAssigned = row[analystColIndex] && String(row[analystColIndex]).trim() !== '';
+        const status = String(row[statusColIndex] || '').trim();
+        // Solo procesar si no está asignado y el estado está vacío (o 'Pendiente', si se define así)
+        if (!isAssigned && status === '') {
+          pendingRecords.push({
+            sheetName: sheetName,
+            rowIndex: index + 2, // Fila real en la hoja
+            timestamp: new Date(row[0]),
+            sucursal: String(row[sucursalColIndex] || '').trim(),
+            vendedor: String(row[vendedorColIndex] || '').trim(),
+            row: row
+          });
+        }
+      });
+    });
+
+    if (pendingRecords.length === 0) {
+      Logger.log('No hay registros pendientes para asignar.');
+      return;
+    }
+
+    // 2. Ordenar los registros para una distribución justa
+    pendingRecords.sort((a, b) => {
+      const tsCompare = a.timestamp.getTime() - b.timestamp.getTime(); // Más antiguo primero
+      if (tsCompare !== 0) return tsCompare;
+      const sucCompare = a.sucursal.localeCompare(b.sucursal);
+      if (sucCompare !== 0) return sucCompare;
+      return a.vendedor.localeCompare(b.vendedor);
+    });
+
+    // 3. Distribuir registros (Round Robin con filtro de sucursal)
+    const analysts = Array.from(analystMap.keys());
+    let analystIndex = 0;
+    const updates = new Map(); // Mapa para agrupar actualizaciones por hoja
+
+    pendingRecords.forEach(record => {
+      let assigned = false;
+      let initialAnalystIndex = analystIndex; // Para evitar bucles infinitos
+
+      while (!assigned) {
+        const analystEmail = analysts[analystIndex];
+        const analystSucursales = analystMap.get(analystEmail);
+
+        const hasAllAccess = analystSucursales.includes('TODAS');
+        const recordHasBranch = record.sucursal && record.sucursal.length > 0;
+        let canHandleSucursal;
+
+        if (hasAllAccess) {
+            canHandleSucursal = true; // Un analista con 'TODAS' puede gestionar cualquier registro.
+        } else if (recordHasBranch) {
+            canHandleSucursal = analystSucursales.includes(record.sucursal);
+        } else {
+            canHandleSucursal = false; // Un analista de sucursal específica no puede gestionar registros sin sucursal.
+        }
+
+        if (canHandleSucursal) {
+          if (!updates.has(record.sheetName)) {
+            updates.set(record.sheetName, []);
+          }
+          updates.get(record.sheetName).push({
+            rowIndex: record.rowIndex,
+            analyst: analystEmail
+          });
+          
+          assigned = true;
+        }
+        
+        analystIndex = (analystIndex + 1) % analysts.length;
+        if (analystIndex === initialAnalystIndex && !assigned) {
+          // Se dio una vuelta completa y ningún analista pudo tomar el registro
+          Logger.log(`No se encontró analista para el registro en la sucursal ${record.sucursal}. Se omitirá por ahora.`);
+          break; // Salir del while y pasar al siguiente registro
+        }
+      }
+    });
+
+    // 4. Aplicar actualizaciones en batch
+    updates.forEach((sheetUpdates, sheetName) => {
+      const sheet = ss.getSheetByName(sheetName);
+      Logger.log(`Aplicando ${sheetUpdates.length} actualizaciones a la hoja ${sheetName}`);
+      sheetUpdates.forEach(update => {
+        // Columna 17 es AnalistaAsignado (índice + 1)
+        sheet.getRange(update.rowIndex, analystColIndex + 1).setValue(update.analyst);
+      });
+    });
+
+    SpreadsheetApp.flush(); // Forzar la aplicación de todos los cambios pendientes.
+    Logger.log(`Proceso de asignación completado. ${pendingRecords.length} registros evaluados.`);
+
+  } catch (e) {
+    Logger.error(`Error fatal en assignPendingRecords: ${e.message} \nStack: ${e.stack}`);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Obtiene los registros asignados a un analista, aplicando filtros.
+ * Primero ejecuta la lógica de asignación de registros pendientes.
+ * @param {string} token El token de sesión del usuario.
+ * @param {object} filters Objeto con filtros (status, branch).
+ * @returns {Array<Object>} Un array de objetos de registro para la vista.
+ */
+function getRecordsForAnalyst(token, filters) {
+  return withAuth(token, (user) => {
+    try {
+      if (user.role !== 'Analista' && user.role !== 'Admin') {
+        throw new Error('Acceso denegado. Se requiere rol de Analista o Administrador.');
+      }
+
+      // Ejecutar la asignación de registros. La función tiene su propio lock para evitar concurrencia.
+      assignPendingRecords();
+      
+      const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+      const allSheets = ss.getSheets();
+      const partitionRegex = /^(V_.+|B_.+|REG_|V_.+_B_.+)_\d{4}_(ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)$/;
+
+      const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
+      const headerMap = headers.reduce((map, header, i) => {
+          map[header] = i;
+          return map;
+      }, {});
+
+      let assignedRecords = [];
+
+      allSheets.forEach(sheet => {
+        const sheetName = sheet.getName();
+        if (!partitionRegex.test(sheetName) || sheet.getLastRow() <= 1) return;
+
+        const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+        data.forEach((row, index) => {
+          const analystAssigned = normalizeEmail(row[headerMap['AnalistaAsignado']]);
+          const recordSucursal = String(row[headerMap['Sucursal']] || '').trim();
+          const recordStatus = String(row[headerMap['EstadoAnalista']] || 'Pendiente').trim();
+
+          // El Admin ve todo, el Analista solo lo suyo
+          const isForCurrentUser = user.role === 'Admin' || analystAssigned === normalizeEmail(user.email);
+
+          if (isForCurrentUser) {
+            // Aplicar filtros
+            const statusFilter = filters.status || 'Pendiente';
+            const branchFilter = filters.branch || 'TODAS';
+
+            const statusMatch = statusFilter === 'Todos' || recordStatus === statusFilter;
+            const branchMatch = branchFilter === 'TODAS' || recordSucursal === branchFilter;
+
+            if (statusMatch && branchMatch) {
+              const recordObject = {};
+              headers.forEach((header, i) => {
+                recordObject[header] = row[i];
+              });
+              // Añadir un identificador único y robusto para acciones
+              recordObject.recordIdentifier = JSON.stringify({ sheet: sheetName, row: index + 2 });
+              assignedRecords.push(recordObject);
+            }
+          }
+        });
+      });
+
+      // Ordenar por fecha descendente para mostrar lo más nuevo primero
+      assignedRecords.sort((a, b) => new Date(b.Timestamp).getTime() - new Date(a.Timestamp).getTime());
+      
+      // Mapear a un formato más simple para el cliente, similar al original
+      return assignedRecords.map(r => {
+        const timestamp = r.Timestamp;
+        const fechaPago = r['Fecha de la Transferencia o Pago'];
+
+        return {
+            'ID Registro': r.id_registro,
+            'Timestamp': timestamp instanceof Date ? timestamp.toISOString() : timestamp,
+            'Vendedor': r.Vendedor,
+            'Nombre Cliente': r['Nombre Cliente'],
+            'Factura': r.Factura,
+            'Monto Pagado': r['Monto Pagado'],
+            'Forma de Pago': r['Forma de Pago'],
+            'Banco Emisor': r['Banco Emisor'],
+            'Banco Receptor': r['Banco Receptor'],
+            'Nro. de Referencia': r['Nro. de Referencia'],
+            'Fecha de la Transferencia o Pago': fechaPago instanceof Date ? fechaPago.toISOString() : fechaPago,
+            'Sucursal': r.Sucursal,
+            'EstadoRegistro': r.EstadoAnalista || 'Pendiente',
+            'recordIdentifier': r.recordIdentifier
+        };
+      });
+    } catch (e) {
+      Logger.error(`Error fatal dentro de getRecordsForAnalyst: ${e.message} Stack: ${e.stack}`);
+      return []; // Devolver siempre un array vacío en caso de error.
+    }
+  });
+}
+
+/**
+ * Actualiza el estado de un registro de cobranza.
+ * @param {string} token El token de sesión.
+ * @param {string} identifier El identificador JSON del registro (hoja y fila).
+ * @param {string} newStatus El nuevo estado ('Procesado' o 'Rechazado').
+ * @param {string|null} comment El comentario (requerido para rechazos).
+ * @returns {string} Mensaje de confirmación.
+ */
+function updateRecordStatus(token, identifier, newStatus, comment) {
+    return withAuth(token, (user) => {
+        if (user.role !== 'Analista' && user.role !== 'Admin') {
+            throw new Error('Acceso denegado.');
+        }
+        if (!['Procesado', 'Rechazado', 'Pendiente'].includes(newStatus)) {
+            throw new Error('Estado no válido.');
+        }
+        if (newStatus === 'Rechazado' && (!comment || comment.trim() === '')) {
+            throw new Error('Se requiere un comentario para rechazar un registro.');
+        }
+
+        const { sheet: sheetName, row: rowIndex } = JSON.parse(identifier);
+        if (!sheetName || !rowIndex) {
+            throw new Error('Identificador de registro inválido.');
+        }
+
+        const sheet = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID).getSheetByName(sheetName);
+        if (!sheet) {
+            throw new Error(`Hoja de partición '${sheetName}' no encontrada.`);
+        }
+
+        const headers = SheetManager.SHEET_CONFIG['Respuestas'].headers;
+        const statusCol = headers.indexOf('EstadoAnalista') + 1;
+        const commentCol = headers.indexOf('ComentarioAnalista') + 1;
+        const analystCol = headers.indexOf('AnalistaAsignado') + 1;
+
+        if (statusCol === 0 || commentCol === 0 || analystCol === 0) {
+            throw new Error('Columnas de estado/comentario no configuradas.');
+        }
+        
+        // Verificación de seguridad: Asegurarse de que el analista solo modifique lo suyo (admin puede todo)
+        const assignedAnalyst = sheet.getRange(rowIndex, analystCol).getValue();
+        if (user.role === 'Analista' && normalizeEmail(assignedAnalyst) !== normalizeEmail(user.email)) {
+            throw new Error('No tiene permiso para modificar un registro que no le fue asignado.');
+        }
+
+        sheet.getRange(rowIndex, statusCol).setValue(newStatus);
+        
+        // Si se revierte a Pendiente, limpiar el comentario. Si se rechaza, guardarlo.
+        if (newStatus === 'Pendiente') {
+            sheet.getRange(rowIndex, commentCol).setValue('');
+        } else if (comment) {
+            sheet.getRange(rowIndex, commentCol).setValue(comment);
+        }
+
+        Logger.log(`Registro en ${sheetName}, fila ${rowIndex} actualizado a ${newStatus} por ${user.email}`);
+        return `Registro actualizado a "${newStatus}" con éxito.`;
+    });
+}
+
+/**
+ * Obtiene las sucursales disponibles para el filtro del analista.
+ * Un admin ve todas las sucursales de la hoja de vendedores.
+ * Un analista ve solo las sucursales que tiene asignadas en la hoja 'analista'.
+ * @param {string} token El token de sesión.
+ * @returns {Array<string>} Un array de nombres de sucursales.
+ */
+function getSucursalesDisponibles(token) {
+    return withAuth(token, (user) => {
+        if (user.role === 'Admin') {
+            // Admin ve todas las sucursales únicas de la lista de vendedores
+            const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
+            if (sheet.getLastRow() < 2) return [];
+            const sucursalesData = sheet.getRange(2, 4, sheet.getLastRow() - 1, 1).getValues().flat();
+            return [...new Set(sucursalesData.map(s => String(s).trim()).filter(s => s))];
+        }
+        
+        if (user.role === 'Analista') {
+            // Analista ve sus sucursales asignadas
+            const analystMap = getAvailableAnalysts();
+            const sucursales = analystMap.get(user.email.toLowerCase()) || [];
+            if (sucursales.includes('TODAS')) {
+                // Si tiene 'TODAS', devolver todas las sucursales existentes
+                const sheet = SheetManager.getSheet('obtenerVendedoresPorUsuario');
+                if (sheet.getLastRow() < 2) return [];
+                const sucursalesData = sheet.getRange(2, 4, sheet.getLastRow() - 1, 1).getValues().flat();
+                return [...new Set(sucursalesData.map(s => String(s).trim()).filter(s => s))];
+            }
+            return sucursales;
+        }
+
+        return []; // Otros roles no ven sucursales
+    });
+}
 
 // #endregion
 

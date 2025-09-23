@@ -24,7 +24,7 @@
     }
     .app-container {
         width: 100%;
-        max-width: 1200px;
+        max-width: 2000px;
     }
     .app-header {
         width: 100%;
@@ -129,6 +129,15 @@
         font-size: 16px;
         font-weight: 500;
         transition: background-color 0.3s, transform 0.1s, box-shadow 0.2s;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+    }
+    .button svg {
+        width: 20px;
+        height: 20px;
+        fill: currentColor;
     }
     .button-primary { background-color: var(--primary-color); color: #ffffff; }
     .button-primary:hover { background-color: var(--primary-dark-color); transform: translateY(-2px); }
@@ -205,7 +214,19 @@
         .records-table tr:nth-child(even) { background-color: #f8fafc; }
         .records-table tr:hover { background-color: #f1f5f9; }
         .records-table th, .records-table td { display: table-cell; padding: 14px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+        .records-table th:nth-child(1), .records-table td:nth-child(1),
+        .records-table th:nth-child(2), .records-table td:nth-child(2),
+        .records-table th:nth-child(6), .records-table td:nth-child(6),
+        .records-table th:nth-child(10), .records-table td:nth-child(10),
+        .records-table th:nth-child(11), .records-table td:nth-child(11) {
+            white-space: nowrap;
+        }
         .records-table td::before { display: none; }
         .modal-content { margin: 15% auto; }
+    }
+
+    .table-container {
+        overflow-x: auto;
+        width: 100%;
     }
 </style>
