@@ -46,3 +46,39 @@ Las contribuciones son bienvenidas. Por favor, abre un issue o pull request para
 ## Licencia
 
 Este proyecto está bajo licencia MIT.
+
+flowchart TD
+    subgraph Usuario
+        A1[Usuario (Analista, Admin, Vendedor)]
+    end
+
+    subgraph Frontend
+        B1[Index.html]
+        B2[AnalystView.html]
+        B3[Auth.html]
+        B4[dashboard.html]
+        B5[Report.html]
+    end
+
+    subgraph Backend
+        C1[Codigo.js (Apps Script)]
+        C2[Google Sheets]
+        C3[API Externa]
+    end
+
+    A1 -->|Acceso WebApp| B1
+    A1 -->|Acceso Panel Analista| B2
+    A1 -->|Autenticación| B3
+    B1 -->|Envía datos| C1
+    B2 -->|Solicita registros| C1
+    B3 -->|Verifica credenciales| C1
+    B4 -->|Consulta reportes| C1
+    B5 -->|Descarga PDF| C1
+
+    C1 -->|Lee/Escribe| C2
+    C1 -->|Sincroniza| C3
+    C1 -->|Genera PDF| B5
+    C1 -->|Actualiza estado| C2
+
+    C2 -->|Almacena registros, usuarios, overrides| C1
+    C3 -->|Provee datos de vendedores, clientes, facturas| C1

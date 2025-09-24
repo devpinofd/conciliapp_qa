@@ -1,0 +1,13 @@
+# Este proyecto está basado principalmente en Google Apps Script y HTML, por lo que no requiere dependencias de Python para su funcionamiento principal.
+# Si necesitas realizar pruebas, análisis o procesamiento adicional en Python, puedes agregar las siguientes dependencias sugeridas:
+
+# Dependencias sugeridas para análisis y manejo de datos
+pandas
+numpy
+requests
+
+# Para generación de PDFs (si se requiere fuera de Apps Script)
+reportlab
+
+# Para pruebas
+pytest
