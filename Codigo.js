@@ -156,10 +156,11 @@ SheetManager.SHEET_CONFIG = {
     headers: ['Timestamp', 'Vendedor', 'Codigo Cliente', 'Nombre Cliente', 'Factura',
       'Monto Pagado', 'Forma de Pago', 'Banco Emisor', 'Banco Receptor',
       'Nro. de Referencia', 'Tipo de Cobro', 'Fecha de la Transferencia o Pago',
-      'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal','id_registro']
+      'Observaciones', 'Usuario Creador', 'EstadoAnalista', 'ComentarioAnalista', 'AnalistaAsignado','Sucursal','id_registro', 'FechaReconciliacion']
   },
   'Auditoria': { headers: ['Timestamp', 'Usuario', 'Nivel', 'Detalle'] },
   'Auditoria_Analistas': { headers: ['Timestamp', 'Analista', 'ID Registro', 'Estado Anterior', 'Estado Nuevo', 'Comentario'] },
+  'RegistrosBancoEFactory': { headers: ['Timestamp', 'sucursal', 'banco_receptor', 'referencia', 'cobro', 'codvendedor', 'vendedor', 'factura', 'monto', 'comentario', 'Nombre'] },
   'Registros Eliminados': {
     headers: ['Fecha Eliminación', 'Usuario que Eliminó', 'Timestamp', 'Vendedor',
       'Codigo Cliente', 'Nombre Cliente', 'Factura', 'Monto Pagado',
@@ -345,6 +346,36 @@ class DataFetcher {
       }));
     } catch (e) {
       Logger.error(`Error en fetchSucursalesPorAnalistaFromApi: ${e.message}`, { query });
+      return [];
+    }
+  }
+
+  fetchRegistrosBancoFromApi(startDate, endDate) {
+    const props = PropertiesService.getScriptProperties();
+    const queryTemplate = props.getProperty('BANCOS_REGISTROS_QUERY');
+    if (!queryTemplate) {
+      Logger.error('La propiedad BANCOS_REGISTROS_QUERY no está definida.');
+      throw new Error('No se encontró la consulta para cargar los registros del banco.');
+    }
+    const query = queryTemplate
+      .replace(/{startDate}/g, startDate)
+      .replace(/{endDate}/g, endDate);
+    try {
+      const data = this.api.fetchData(query);
+      return data.map(row => ({
+        sucursal: String(row.sucursal || '').trim(),
+        banco_receptor: String(row.banco_receptor || '').trim(),
+        referencia: String(row.referencia || '').trim(),
+        cobro: String(row.cobro || '').trim(),
+        codvendedor: String(row.codvendedor || '').trim(),
+        vendedor: String(row.vendedor || '').trim(),
+        factura: String(row.factura || '').trim(),
+        monto: parseFloat(row.monto) || 0,
+        comentario: String(row.comentario || '').trim(),
+        Nombre: String(row.Nombre || '').trim()
+      }));
+    } catch (e) {
+      Logger.error(`Error en fetchRegistrosBancoFromApi: ${e.message}`, { query });
       return [];
     }
   }
@@ -1194,24 +1225,33 @@ function checkForUpdates(token, clientTimestamp) {
 
 // --- Funciones para la UI de Administración de Overrides ---
 
-function getOverrideData(token) {
+function getOverrideData(token, forceRefresh = false) {
     return withAuth(token, (user) => {
         if (user.role !== 'Admin') throw new Error('Acceso denegado.');
 
-        // 1. Obtener todos los vendedores
-        const dataFetcher = new DataFetcher();
-        const allSellers = dataFetcher.fetchAllVendedoresFromSheet();
+        if (forceRefresh) {
+            PropertiesService.getScriptProperties().deleteProperty('allSellers');
+            PropertiesService.getScriptProperties().deleteProperty('allAnalysts');
+            PropertiesService.getScriptProperties().deleteProperty('currentRules');
+        }
 
-        // 2. Obtener todos los analistas
-        const allAnalysts = Array.from(getAvailableAnalysts().keys());
+        const allSellers = CacheManager.get('allSellers', 3600, () => {
+            const dataFetcher = new DataFetcher();
+            return dataFetcher.fetchAllVendedoresFromSheet();
+        });
 
-        // 3. Obtener las reglas de override actuales
-        const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
-        const overrideData = overrideSheet.getLastRow() > 1 ? overrideSheet.getRange(2, 1, overrideSheet.getLastRow() - 1, 2).getValues() : [];
-        const currentRules = overrideData.map(([sellerCode, analystEmail]) => ({
-            sellerCode: String(sellerCode).trim(),
-            analystEmail: normalizeEmail(analystEmail)
-        }));
+        const allAnalysts = CacheManager.get('allAnalysts', 3600, () => {
+            return Array.from(getAvailableAnalysts().keys());
+        });
+
+        const currentRules = CacheManager.get('currentRules', 60, () => {
+            const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
+            const overrideData = overrideSheet.getLastRow() > 1 ? overrideSheet.getRange(2, 1, overrideSheet.getLastRow() - 1, 2).getValues() : [];
+            return overrideData.map(([sellerCode, analystEmail]) => ({
+                sellerCode: String(sellerCode).trim(),
+                analystEmail: normalizeEmail(analystEmail)
+            }));
+        });
 
         return { allSellers, allAnalysts, currentRules };
     });
@@ -1224,7 +1264,10 @@ function addOverrideRule(token, sellerCode, analystEmail) {
 
         const overrideSheet = SheetManager.getSheet('AsignacionOverrides');
         const lastRow = overrideSheet.getLastRow();
-        const sellerCodes = overrideSheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+        let sellerCodes = [];
+        if (lastRow > 1) {
+            sellerCodes = overrideSheet.getRange(2, 1, lastRow - 1, 1).getValues().flat();
+        }
 
         const rowIndex = sellerCodes.indexOf(sellerCode);
 
@@ -1232,11 +1275,13 @@ function addOverrideRule(token, sellerCode, analystEmail) {
             // Si el vendedor ya existe, actualiza el analista
             overrideSheet.getRange(rowIndex + 2, 2).setValue(analystEmail);
             Logger.log(`Regla de override actualizada por ${user.email}: Vendedor ${sellerCode} -> Analista ${analystEmail}`);
+            PropertiesService.getScriptProperties().deleteProperty('currentRules'); // Invalidate cache
             return "Regla actualizada con éxito.";
         } else {
             // Si no existe, añade una nueva fila
             overrideSheet.appendRow([sellerCode, analystEmail]);
             Logger.log(`Nueva regla de override creada por ${user.email}: Vendedor ${sellerCode} -> Analista ${analystEmail}`);
+            PropertiesService.getScriptProperties().deleteProperty('currentRules'); // Invalidate cache
             return "Nueva regla creada con éxito.";
         }
     });
@@ -1257,6 +1302,7 @@ function deleteOverrideRule(token, sellerCode) {
         if (rowIndex !== -1) {
             overrideSheet.deleteRow(rowIndex + 2);
             Logger.log(`Regla de override eliminada por ${user.email} para el vendedor ${sellerCode}`);
+            PropertiesService.getScriptProperties().deleteProperty('currentRules'); // Invalidate cache
             return "Regla eliminada con éxito.";
         } else {
             throw new Error('No se encontró la regla para el vendedor especificado.');
@@ -1288,6 +1334,9 @@ function doGet(e) {
     let templateName;
     const page = String((params.view || params.page || '')).toLowerCase();
 
+    // --- INICIO DE LA MODIFICACIÓN: Enrutamiento para rol Admin ---
+    // Motivo: Permitir que los usuarios con rol 'Admin' accedan a la vista de analista.
+    /*
     if (page === 'report') {
         templateName = 'Report';
     } else if (user.role === 'Analista') {
@@ -1295,6 +1344,15 @@ function doGet(e) {
     } else {
         templateName = 'Index'; // Por defecto, o si es Vendedor, carga Index
     }
+    */
+    if (page === 'report') {
+        templateName = 'Report';
+    } else if (user.role === 'Analista' || user.role === 'Admin') {
+        templateName = 'AnalystView'; // Si el rol es Analista o Admin, carga su vista
+    } else {
+        templateName = 'Index'; // Por defecto, o si es Vendedor, carga Index
+    }
+    // --- FIN DE LA MODIFICACIÓN ---
     
     try {
         const template = HtmlService.createTemplateFromFile(templateName);
@@ -1367,6 +1425,48 @@ function obtenerRegistrosEnviados(token, vendedorFiltro) {
 function eliminarRegistro(token, rowIndex) {
   return withAuth(token, (user) => cobranzaService.deleteRecord(rowIndex, user.email));
 }
+
+function getNotificacionesPagosConfirmados(token) {
+  return withAuth(token, (user) => {
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+    const allSheets = ss.getSheets();
+    const partitionRegex = /^BANCO-.*_\d{4}$/;
+    const headers = SheetManager.SHEET_CONFIG['RegistrosBancoEFactory'].headers;
+    const userColIndex = headers.indexOf('codvendedor');
+    const timestampColIndex = headers.indexOf('Timestamp');
+
+    let notifications = [];
+
+    const dataFetcher = new DataFetcher();
+    const vendedores = dataFetcher.fetchVendedoresFromSheetByUser(user.email);
+    const codVendedores = vendedores.map(v => v.codigo);
+
+    allSheets.forEach(sheet => {
+      const sheetName = sheet.getName();
+      if (partitionRegex.test(sheetName) && sheet.getLastRow() > 1) {
+        const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+        data.forEach(row => {
+          const codVendedor = row[userColIndex];
+          const timestamp = row[timestampColIndex];
+
+          if (codVendedores.includes(codVendedor) && timestamp) {
+            const now = new Date();
+            const diff = now.getTime() - new Date(timestamp).getTime();
+            const hours = diff / (1000 * 60 * 60);
+            if (hours <= 24) {
+              notifications.push({
+                factura: row[headers.indexOf('factura')],
+                monto: row[headers.indexOf('monto')],
+                cliente: row[headers.indexOf('Nombre')]
+              });
+            }
+          }
+        });
+      }
+    });
+    return notifications;
+  });
+}
 function descargarRegistrosPDF(token, vendedorFiltro) {
   return withAuth(token, (user) => {
     try {
@@ -1409,7 +1509,258 @@ function descargarRegistrosPDF(token, vendedorFiltro) {
     }
   });
 }
+
+function exportarVistaFiltradaPDF(token, filters) {
+    return withAuth(token, (user) => {
+        try {
+            // 1. Obtener los registros usando los filtros, igual que lo hace la vista.
+            const registros = getRecordsForAnalyst(token, filters);
+
+            if (!registros || registros.length === 0) {
+                throw new Error("No se encontraron registros con los filtros seleccionados para generar el PDF.");
+            }
+
+            // 2. Reutilizar la lógica de generación de PDF de la función `exportarAnalisisPDF`
+            const registrosPorVendedor = registros.reduce((acc, r) => {
+                const vendedor = r.Vendedor || 'Sin Vendedor';
+                if (!acc[vendedor]) acc[vendedor] = [];
+                acc[vendedor].push(r);
+                return acc;
+            }, {});
+
+            // --- INICIO DE LA MODIFICACIÓN: Ordenar por Banco Receptor ---
+            // Motivo: El usuario solicitó que el orden principal en el PDF sea por banco receptor.
+            /*
+            for (const vendedor in registrosPorVendedor) {
+                registrosPorVendedor[vendedor].sort((a, b) => {
+                    // Criterio principal: Fecha de Registro (Timestamp) ascendente
+                    const dateA = new Date(a.Timestamp);
+                    const dateB = new Date(b.Timestamp);
+                    if (dateA.getTime() !== dateB.getTime()) {
+                        return dateA.getTime() - dateB.getTime();
+                    }
+
+                    // Criterio secundario: Banco Receptor alfabético
+                    const bancoA = a['Banco Receptor'] || '';
+                    const bancoB = b['Banco Receptor'] || '';
+                    return bancoA.localeCompare(bancoB);
+                });
+            }
+            */
+            for (const vendedor in registrosPorVendedor) {
+                registrosPorVendedor[vendedor].sort((a, b) => {
+                    // Criterio principal: Banco Receptor alfabético
+                    const bancoA = a['Banco Receptor'] || '';
+                    const bancoB = b['Banco Receptor'] || '';
+                    const bancoCompare = bancoA.localeCompare(bancoB);
+                    if (bancoCompare !== 0) {
+                        return bancoCompare;
+                    }
+
+                    // Criterio secundario: Fecha de Registro (Timestamp) ascendente
+                    const dateA = new Date(a.Timestamp);
+                    const dateB = new Date(b.Timestamp);
+                    return dateA.getTime() - dateB.getTime();
+                });
+            }
+            // --- FIN DE LA MODIFICACIÓN ---
+
+            const tz = Session.getScriptTimeZone();
+            const generatedDate = Utilities.formatDate(new Date(), tz, 'dd/MM/yyyy HH:mm:ss');
+            let pageCounter = 1;
+            const totalPages = Object.keys(registrosPorVendedor).length;
+            let htmlContent = `<html><head><style>@page { size: A4 landscape; margin: 1cm; } body { font-family: Arial, sans-serif; font-size: 9pt; } .page-break { page-break-after: always; } .report-table { border-collapse: collapse; width: 100%; } .report-table th, .report-table td { border: 1px solid #ccc; padding: 4px; text-align: left; } .report-table th { background-color: #f2f2f2; } .header, .footer { width: 100%; position: fixed; } .header { top: -0.5cm; text-align: center; } .footer { bottom: 0; font-size: 8pt; } .text-right { text-align: right; } .text-center { text-align: center; } h1, h2, h3 { margin: 0; padding: 0; }</style></head><body>`;
+
+            for (const vendedor in registrosPorVendedor) {
+                const loteRegistros = registrosPorVendedor[vendedor];
+                const totalRegistrosVendedor = loteRegistros.length;
+                htmlContent += `<div class="header"><h2>Reporte de Cobranza</h2></div><h3>Vendedor: ${vendedor}</h3><p style="margin-top:0; padding-top:0;">Analista Asignado: ${user.name}</p><table class="report-table"><thead><tr><th>ID Reg.</th><th>F. Registro</th><th>Cliente</th><th>Factura(s)</th><th>Monto</th><th>Forma de Pago</th><th>Banco Emisor</th><th>Banco Receptor</th><th>Referencia</th><th>F. Pago</th><th>Sucursal</th><th>Estado</th></tr></thead><tbody>`;
+                loteRegistros.forEach(r => {
+                    const monto = typeof r['Monto Pagado'] === 'number' ? r['Monto Pagado'].toLocaleString('es-VE', { minimumFractionDigits: 2 }) : r['Monto Pagado'];
+                    const fechaRegistro = r.Timestamp ? Utilities.formatDate(new Date(r.Timestamp), tz, 'dd/MM/yy') : 'N/A';
+                    const fechaPago = r['Fecha de la Transferencia o Pago'] ? Utilities.formatDate(new Date(r['Fecha de la Transferencia o Pago']), tz, 'dd/MM/yy') : 'N/A';
+                    htmlContent += `<tr><td>${r['ID Registro'] || 'N/A'}</td><td>${fechaRegistro}</td><td>${r['Nombre Cliente'] || 'N/A'}</td><td>${r.Factura || 'N/A'}</td><td class="text-right">${monto}</td><td>${r['Forma de Pago'] || 'N/A'}</td><td>${r['Banco Emisor'] || 'N/A'}</td><td>${r['Banco Receptor'] || 'N/A'}</td><td>${r['Nro. de Referencia'] || 'N/A'}</td><td>${fechaPago}</td><td>${r.Sucursal || 'N/A'}</td><td>${r.EstadoRegistro || 'Pendiente'}</td></tr>`;
+                });
+                htmlContent += `</tbody></table><div class="footer"><table><tr><td width="33.3%">Fecha de Impresión: ${generatedDate}</td><td width="33.3%" class="text-center">Total de Registros en esta página: ${totalRegistrosVendedor}</td><td width="33.3%" class="text-right">Página ${pageCounter} de ${totalPages}</td></tr></table></div>`;
+                if (pageCounter < totalPages) {
+                    htmlContent += '<div class="page-break"></div>';
+                }
+                pageCounter++;
+            }
+            htmlContent += '</body></html>';
+
+            const blob = Utilities.newBlob(htmlContent, 'text/html', 'reporte.html').getAs(MimeType.PDF);
+            const filename = `Reporte_Analisis_${Utilities.formatDate(new Date(), tz, 'yyyyMMdd_HHmm')}.pdf`;
+            blob.setName(filename);
+
+            return {
+                filename: filename,
+                base64: Utilities.base64Encode(blob.getBytes())
+            };
+
+        } catch (e) {
+            Logger.error(`Error en exportarVistaFiltradaPDF: ${e.message} \nStack: ${e.stack}`);
+            throw new Error(`No se pudo generar el PDF: ${e.message}`);
+        }
+    });
+}
+
+function exportarAnalisisPDF(token, registros, analistaNombre) {
+    return withAuth(token, (user) => {
+        try {
+            if (!registros || registros.length === 0) {
+                throw new Error("No se proporcionaron registros para generar el PDF.");
+            }
+
+            // 1. Agrupar registros por Vendedor
+            const registrosPorVendedor = registros.reduce((acc, r) => {
+                const vendedor = r.Vendedor || 'Sin Vendedor';
+                if (!acc[vendedor]) {
+                    acc[vendedor] = [];
+                }
+                acc[vendedor].push(r);
+                return acc;
+            }, {});
+
+            // 2. Ordenar registros dentro de cada grupo por fecha de pago
+            for (const vendedor in registrosPorVendedor) {
+                registrosPorVendedor[vendedor].sort((a, b) => {
+                    const dateA = a['Fecha de la Transferencia o Pago'] ? new Date(a['Fecha de la Transferencia o Pago']) : 0;
+                    const dateB = b['Fecha de la Transferencia o Pago'] ? new Date(b['Fecha de la Transferencia o Pago']) : 0;
+                    if (!dateA) return 1; // Mover registros sin fecha al final
+                    if (!dateB) return -1;
+                    return dateA.getTime() - dateB.getTime();
+                });
+            }
+
+            const tz = Session.getScriptTimeZone();
+            const generatedDate = Utilities.formatDate(new Date(), tz, 'dd/MM/yyyy HH:mm:ss');
+            let pageCounter = 1;
+            const totalPages = Object.keys(registrosPorVendedor).length;
+            let htmlContent = `
+                <html>
+                <head>
+                    <style>
+                        @page { size: A4 landscape; margin: 1cm; }
+                        body { font-family: Arial, sans-serif; font-size: 9pt; }
+                        .page-break { page-break-after: always; }
+                        .report-table { border-collapse: collapse; width: 100%; }
+                        .report-table th, .report-table td { border: 1px solid #ccc; padding: 4px; text-align: left; }
+                        .report-table th { background-color: #f2f2f2; }
+                        .header, .footer { width: 100%; position: fixed; }
+                        .header { top: -0.5cm; text-align: center; }
+                        .footer { bottom: 0; font-size: 8pt; }
+                        .text-right { text-align: right; }
+                        .text-center { text-align: center; }
+                        h1, h2, h3 { margin: 0; padding: 0; }
+                    </style>
+                </head>
+                <body>`;
+
+            for (const vendedor in registrosPorVendedor) {
+                const loteRegistros = registrosPorVendedor[vendedor];
+                const totalRegistrosVendedor = loteRegistros.length;
+
+                // --- Cabecera de la página ---
+                htmlContent += `
+                    <div class="header">
+                        <h2>Reporte de Cobranza</h2>
+                    </div>
+                `;
+
+                // --- Título del reporte para este vendedor ---
+                htmlContent += `
+                    <h3>Vendedor: ${vendedor}</h3>
+                    <p style="margin-top:0; padding-top:0;">Analista Asignado: ${analistaNombre || user.name}</p>
+                `;
+
+                // --- Tabla de registros ---
+                htmlContent += `
+                    <table class="report-table">
+                        <thead>
+                            <tr>
+                                <th>ID Reg.</th>
+                                <th>F. Registro</th>
+                                <th>Cliente</th>
+                                <th>Factura(s)</th>
+                                <th>Monto</th>
+                                <th>Forma de Pago</th>
+                                <th>Banco Emisor</th>
+                                <th>Banco Receptor</th>
+                                <th>Referencia</th>
+                                <th>F. Pago</th>
+                                <th>Sucursal</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+
+                loteRegistros.forEach(r => {
+                    const monto = typeof r['Monto Pagado'] === 'number' ? r['Monto Pagado'].toLocaleString('es-VE', { minimumFractionDigits: 2 }) : r['Monto Pagado'];
+                    const fechaRegistro = r.Timestamp ? Utilities.formatDate(new Date(r.Timestamp), tz, 'dd/MM/yy') : 'N/A';
+                    const fechaPago = r['Fecha de la Transferencia o Pago'] ? Utilities.formatDate(new Date(r['Fecha de la Transferencia o Pago']), tz, 'dd/MM/yy') : 'N/A';
+                    
+                    htmlContent += `
+                        <tr>
+                            <td>${r['ID Registro'] || 'N/A'}</td>
+                            <td>${fechaRegistro}</td>
+                            <td>${r['Nombre Cliente'] || 'N/A'}</td>
+                            <td>${r.Factura || 'N/A'}</td>
+                            <td class="text-right">${monto}</td>
+                            <td>${r['Forma de Pago'] || 'N/A'}</td>
+                            <td>${r['Banco Emisor'] || 'N/A'}</td>
+                            <td>${r['Banco Receptor'] || 'N/A'}</td>
+                            <td>${r['Nro. de Referencia'] || 'N/A'}</td>
+                            <td>${fechaPago}</td>
+                            <td>${r.Sucursal || 'N/A'}</td>
+                            <td>${r.EstadoRegistro || 'Pendiente'}</td>
+                        </tr>`;
+                });
+
+                htmlContent += `
+                        </tbody>
+                    </table>`;
+
+                // --- Pie de página ---
+                htmlContent += `
+                    <div class="footer">
+                        <table>
+                            <tr>
+                                <td width="33.3%">Fecha de Impresión: ${generatedDate}</td>
+                                <td width="33.3%" class="text-center">Total de Registros en esta página: ${totalRegistrosVendedor}</td>
+                                <td width="33.3%" class="text-right">Página ${pageCounter} de ${totalPages}</td>
+                            </tr>
+                        </table>
+                    </div>
+                `;
+
+                if (pageCounter < totalPages) {
+                    htmlContent += '<div class="page-break"></div>';
+                }
+                pageCounter++;
+            }
+
+            htmlContent += '</body></html>';
+
+            const blob = Utilities.newBlob(htmlContent, 'text/html', 'reporte.html').getAs(MimeType.PDF);
+            const filename = `Reporte_Analisis_${Utilities.formatDate(new Date(), tz, 'yyyyMMdd_HHmm')}.pdf`;
+            blob.setName(filename);
+
+            return {
+                filename: filename,
+                base64: Utilities.base64Encode(blob.getBytes())
+            };
+
+        } catch (e) {
+            Logger.error(`Error en exportarAnalisisPDF: ${e.message} \nStack: ${e.stack}`);
+            throw new Error(`No se pudo generar el PDF: ${e.message}`);
+        }
+    });
+}
+
 // #endregion
+
+
 
 // #region Lógica de Particionamiento (Restaurada)
 const PARTITION_BY_VENDOR_PREFIX = 'V_';
@@ -1549,6 +1900,9 @@ function setApiQueries() {
 
   const sucursalesUsuariosQuery = `select s.nom_suc as sucursal,su.cod_usu as codigousuario from Sucursales_Usuarios su left  join sucursales s on s.cod_suc=su.cod_suc order by 2 asc`;
   props.setProperty('SUCURSALES_USUARIOS_QUERY', sucursalesUsuariosQuery);
+
+  const bancosRegistrosQuery = `select  trim(s.nom_suc)as sucursal, concat(trim(cb.cod_cue),'-', trim(cb.nom_cue)) as 'banco_receptor', trim(mv.referencia) as referencia, trim(rc.documento) as cobro, trim(rc.cod_ven) as codvendedor, trim(v.nom_ven)as vendedor, trim(isnull(rc.documento,0)) as factura, cast(mv.mon_deb as decimal (18,2))as monto, trim(mv.comentario)as comentario, trim(c.nom_cli) as Nombre from movimientos_cuentas mv join cuentas_bancarias cb on cb.cod_cue=mv.cod_cue join cobros rc on rc.documento=mv.doc_ori join clientes c on c.cod_cli=rc.cod_cli join sucursales s on s.cod_suc= rc.cod_suc join vendedores v on v.cod_ven=rc.cod_ven where mv.status='confirmado' and mv.fec_ini between '{startDate}' AND '{endDate}'`;
+  props.setProperty('BANCOS_REGISTROS_QUERY', bancosRegistrosQuery);
 }
 
 function conservarPrimerasPropiedades() {
@@ -1577,6 +1931,66 @@ function crearTriggerConservarPropiedades() {
     .create();
 }
 
+function crearTriggersSincronizacionYReconciliacion() {
+  const triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(trigger => {
+    if (trigger.getHandlerFunction() === 'sincronizarRegistrosBanco') {
+      ScriptApp.deleteTrigger(trigger);
+    }
+  });
 
- 
+  ScriptApp.newTrigger('sincronizarRegistrosBanco')
+    .timeBased()
+    .daily()
+    .atHour(1)
+    .create();
+
+  Logger.log('Triggers de sincronización y reconciliación creados/actualizados correctamente.');
+}
+
+function getPartitionNameForBanco(date, banco) {
+  const year = date.getFullYear();
+  return `BANCO-${banco}_${year}`;
+}
+
+function sincronizarRegistrosBanco() {
+  const dataFetcher = new DataFetcher();
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const formatDate = (date) => Utilities.formatDate(date, 'GMT', 'yyyy-MM-dd');
+
+  const registros = dataFetcher.fetchRegistrosBancoFromApi(formatDate(yesterday), formatDate(today));
+
+  if (registros && registros.length > 0) {
+    const ss = SpreadsheetApp.openById(SheetManager.SPREADSHEET_ID);
+    const header = SheetManager.SHEET_CONFIG['RegistrosBancoEFactory'].headers;
+
+    const registrosPorParticion = registros.reduce((acc, registro) => {
+      const partitionName = getPartitionNameForBanco(new Date(), registro.banco_receptor);
+      if (!acc[partitionName]) {
+        acc[partitionName] = [];
+      }
+      acc[partitionName].push(registro);
+      return acc;
+    }, {});
+
+    for (const partitionName in registrosPorParticion) {
+      const partitionSheet = ensurePartitionSheet(ss, partitionName, header);
+      let existingReferences = [];
+      if (partitionSheet.getLastRow() > 1) {
+        existingReferences = partitionSheet.getRange(2, 4, partitionSheet.getLastRow() - 1, 1).getValues().flat();
+      }
+      const nuevosRegistros = registrosPorParticion[partitionName].filter(r => !existingReferences.includes(r.referencia));
+
+      if (nuevosRegistros.length > 0) {
+        const values = nuevosRegistros.map(r => [new Date(), r.sucursal, r.banco_receptor, r.referencia, r.cobro, r.codvendedor, r.vendedor, r.factura, r.monto, r.comentario, r.Nombre]);
+        partitionSheet.getRange(partitionSheet.getLastRow() + 1, 1, values.length, values[0].length).setValues(values);
+        Logger.log(`${values.length} nuevos registros de banco añadidos a la partición ${partitionName}.`);
+      }
+    }
+  }
+}
+
 // #endregion

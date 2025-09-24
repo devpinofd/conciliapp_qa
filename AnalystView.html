@@ -23,6 +23,10 @@
             font-size: 14px;
             margin-left: 8px;
         }
+        .card-header-actions {
+            display: flex;
+            gap: 10px;
+        }
     </style>
 </head>
 <body>
@@ -91,7 +95,10 @@
         <div class="card">
             <header class="card-header records-header">
                 <h2>Registros de Cobranza</h2>
-                <button id="refresh-data-btn" class="button button-secondary">Refrescar Datos</button>
+                <div class="card-header-actions">
+                    <button id="download-pdf-btn" class="button button-primary">Descargar PDF</button>
+                    <button id="refresh-data-btn" class="button button-secondary">Refrescar Datos</button>
+                </div>
             </header>
             <main class="card-body">
                 <p id="records-status">Cargando registros...</p>
@@ -141,6 +148,7 @@
                 </div>
                 <div class="form-actions">
                     <button id="add-override-btn" class="button button-primary">Crear Regla</button>
+                    <button id="refresh-overrides-btn" class="button button-secondary">Refrescar</button>
                 </div>
                 <hr style="margin: 24px 0; border-color: #e2e8f0;">
                 <h3>Reglas Actuales</h3>
@@ -193,6 +201,7 @@
         const webAppUrl = "<?!= url ?>";
         let sessionToken = localStorage.getItem('sessionToken') || "<?!= token ?>";
         const user = JSON.parse('<?= JSON.stringify(user) ?>');
+        let currentRecordsForPDF = []; // Variable para almacenar los registros filtrados para el PDF
 
         const ui = {
             notification: document.getElementById('notification'),
@@ -207,6 +216,7 @@
             filterBanco: document.getElementById('filtro-banco'),
             refreshBtn: document.getElementById('refresh-data-btn'),
             logoutButton: document.getElementById('logout-button'),
+            downloadPdfBtn: document.getElementById('download-pdf-btn'),
             toggleLoading(show) { this.loadingSpinner.style.display = show ? 'flex' : 'none'; },
             showNotification(message, type = 'success') { 
                 this.notification.textContent = message;
@@ -215,6 +225,38 @@
                 setTimeout(() => this.notification.classList.remove('visible'), 4000); 
             }
         };
+
+        const rejectionModal = document.getElementById('rejection-modal');
+        const confirmActionModal = document.getElementById('confirm-action-modal');
+        const confirmRejectionBtn = document.getElementById('confirm-rejection-btn');
+        const cancelRejectionBtn = document.getElementById('cancel-rejection-btn');
+        const rejectionReasonText = document.getElementById('rejection-reason');
+        let currentIdentifierForRejection = null;
+
+        function openRejectionModal(identifier) {
+            currentIdentifierForRejection = identifier;
+            rejectionModal.style.display = 'flex';
+        }
+        function closeRejectionModal() {
+            rejectionModal.style.display = 'none';
+            rejectionReasonText.value = '';
+            currentIdentifierForRejection = null;
+        }
+
+        const confirmActionBtn = document.getElementById('confirm-action-btn');
+        const cancelConfirmBtn = document.getElementById('cancel-confirm-btn');
+        const confirmModalText = document.getElementById('confirm-modal-text');
+        let onConfirmCallback = null;
+
+        function showConfirmModal(message, onConfirm) {
+            confirmModalText.textContent = message;
+            onConfirmCallback = onConfirm;
+            confirmActionModal.style.display = 'flex';
+        }
+        function closeConfirmModal() {
+            confirmActionModal.style.display = 'none';
+            onConfirmCallback = null;
+        }
 
         const DB_NAME = 'AnalystData';
         const DB_VERSION = 1;
@@ -271,6 +313,8 @@
 
         function renderTable(records) {
             ui.tableBody.innerHTML = '';
+            currentRecordsForPDF = []; // Limpiar antes de renderizar
+
             if (!records || records.length === 0) {
                 ui.recordsStatus.textContent = 'No se encontraron registros.';
                 ui.recordsStatus.style.display = 'block';
@@ -309,6 +353,8 @@
                 ui.recordsStatus.style.display = 'block';
                 return;
             }
+
+            currentRecordsForPDF = filteredRecords; // Almacenar los registros filtrados
 
             filteredRecords.forEach(record => {
                 const tr = document.createElement('tr');
@@ -498,10 +544,54 @@
                 } catch (error) {
                     console.error('Error polling for updates:', error);
                 }
-            }, 30000); // Poll every 30 seconds
+            }, 30000); // <--- AÑADIDO: Ejecutar cada 30 segundos
+        }
+
+        function descargarAnalisisPDF() {
+            ui.toggleLoading(true);
+            ui.showNotification('Generando PDF, por favor espere...', 'info');
+            ui.downloadPdfBtn.disabled = true;
+
+            // Recopilar los filtros actuales de la UI
+            const filters = {
+                status: ui.filterStatus.value,
+                branch: ui.filterBranch.value,
+                // Añadimos los otros filtros que getRecordsForAnalyst espera
+                // Aunque no se usen en la UI de filtros principal, los pasamos para consistencia
+                date: ui.filterDate.value, 
+                vendedor: ui.filterVendedor.value,
+                cliente: ui.filterCliente.value,
+                banco: ui.filterBanco.value
+            };
+
+            google.script.run
+                .withSuccessHandler(onPdfSuccess)
+                .withFailureHandler(onPdfFailure)
+                .exportarVistaFiltradaPDF(sessionToken, filters);
+        }
+
+        function onPdfSuccess(response) {
+            const link = document.createElement('a');
+            link.href = 'data:application/pdf;base64,' + response.base64;
+            link.download = response.filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            ui.showNotification('La descarga del PDF ha comenzado.', 'success');
+            ui.toggleLoading(false);
+            ui.downloadPdfBtn.disabled = false;
+        }
+
+        function onPdfFailure(error) {
+            ui.showNotification('Error al generar el PDF: ' + error.message, 'error');
+            ui.toggleLoading(false);
+            ui.downloadPdfBtn.disabled = false;
         }
 
         function setupEventListeners() {
+            ui.downloadPdfBtn.addEventListener('click', descargarAnalisisPDF);
+
             document.getElementById('refresh-link').addEventListener('click', (e) => {
                 e.preventDefault();
                 document.getElementById('update-notification').classList.remove('visible');
@@ -520,7 +610,7 @@
             ui.filterVendedor.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
             ui.filterCliente.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
             ui.filterBanco.addEventListener('change', async () => renderTable(await getRecordsFromDB()));
-            // Listener para abrir el menú
+            
             ui.tableBody.addEventListener('click', (event) => {
                 const kebabButton = event.target.closest('.kebab-button');
                 if (kebabButton) {
@@ -541,13 +631,11 @@
                 }
             });
 
-            // Listener global para acciones y para cerrar el menú
             document.addEventListener('click', (event) => {
                 const target = event.target;
                 const actionButton = target.closest('.dropdown-item');
                 const visibleDropdown = document.querySelector('.actions-dropdown.visible');
 
-                // 1. Si se hace clic en un botón de acción
                 if (actionButton) {
                     if (visibleDropdown) visibleDropdown.classList.remove('visible');
                     
@@ -570,31 +658,10 @@
                     return;
                 }
 
-                // 2. Si se hace clic fuera del menú, cerrarlo
                 if (visibleDropdown && !target.closest('.kebab-button')) {
                     visibleDropdown.classList.remove('visible');
                 }
             });
-
-            // --- Lógica para Modales ---
-            const rejectionModal = document.getElementById('rejection-modal');
-            const confirmActionModal = document.getElementById('confirm-action-modal');
-
-            // Modal de Rechazo
-            const confirmRejectionBtn = document.getElementById('confirm-rejection-btn');
-            const cancelRejectionBtn = document.getElementById('cancel-rejection-btn');
-            const rejectionReasonText = document.getElementById('rejection-reason');
-            let currentIdentifierForRejection = null;
-
-            function openRejectionModal(identifier) {
-                currentIdentifierForRejection = identifier;
-                rejectionModal.style.display = 'flex';
-            }
-            function closeRejectionModal() {
-                rejectionModal.style.display = 'none';
-                rejectionReasonText.value = '';
-                currentIdentifierForRejection = null;
-            }
 
             cancelRejectionBtn.addEventListener('click', closeRejectionModal);
             confirmRejectionBtn.addEventListener('click', () => {
@@ -607,22 +674,6 @@
                 }
             });
 
-            // Modal de Confirmación Genérico
-            const confirmActionBtn = document.getElementById('confirm-action-btn');
-            const cancelConfirmBtn = document.getElementById('cancel-confirm-btn');
-            const confirmModalText = document.getElementById('confirm-modal-text');
-            let onConfirmCallback = null;
-
-            function showConfirmModal(message, onConfirm) {
-                confirmModalText.textContent = message;
-                onConfirmCallback = onConfirm;
-                confirmActionModal.style.display = 'flex';
-            }
-            function closeConfirmModal() {
-                confirmActionModal.style.display = 'none';
-                onConfirmCallback = null;
-            }
-
             cancelConfirmBtn.addEventListener('click', closeConfirmModal);
             confirmActionBtn.addEventListener('click', () => {
                 if (typeof onConfirmCallback === 'function') {
@@ -631,7 +682,6 @@
                 closeConfirmModal();
             });
 
-            // Cerrar modales al hacer clic fuera
             window.addEventListener('click', (event) => {
                 if (event.target == rejectionModal) closeRejectionModal();
                 if (event.target == confirmActionModal) closeConfirmModal();
@@ -661,10 +711,28 @@
                 rulesTableBody: document.getElementById('override-rules-table-body')
             };
 
-            async function loadAdminData() {
+            function updateOrAddRuleInTable(rule) {
+                const existingRow = uiAdmin.rulesTableBody.querySelector(`[data-seller-code="${rule.sellerCode}"]`);
+                if (existingRow) {
+                    existingRow.parentElement.parentElement.querySelector('td:nth-child(2)').textContent = rule.analystEmail;
+                } else {
+                    const tr = document.createElement('tr');
+                    const sellerName = uiAdmin.vendedorSelect.options[uiAdmin.vendedorSelect.selectedIndex].text;
+                    tr.innerHTML = `
+                        <td data-label="Vendedor">${sellerName}</td>
+                        <td data-label="Analista Asignado">${rule.analystEmail}</td>
+                        <td data-label="Acciones">
+                            <button class="button button-danger btn-delete-override" data-seller-code="${rule.sellerCode}">Eliminar</button>
+                        </td>
+                    `;
+                    uiAdmin.rulesTableBody.appendChild(tr);
+                }
+            }
+
+            async function loadAdminData(forceRefresh = false) {
                 ui.toggleLoading(true);
                 try {
-                    const data = await runGoogleScript('getOverrideData', sessionToken);
+                    const data = await runGoogleScript('getOverrideData', sessionToken, forceRefresh);
                     uiAdmin.vendedorSelect.innerHTML = data.allSellers.map(s => `<option value="${s.codigo}">${s.nombre}</option>`).join('');
                     uiAdmin.analistaSelect.innerHTML = data.allAnalysts.map(a => `<option value="${a}">${a}</option>`).join('');
                     uiAdmin.rulesTableBody.innerHTML = '';
@@ -701,7 +769,8 @@
                 try {
                     const result = await runGoogleScript('addOverrideRule', sessionToken, sellerCode, analystEmail);
                     ui.showNotification(result, 'success');
-                    await loadAdminData();
+                    const newRule = { sellerCode, analystEmail };
+                    updateOrAddRuleInTable(newRule);
                 } catch (error) {
                     ui.showNotification('Error al crear regla: ' + error.message, 'error');
                 } finally {
@@ -712,20 +781,27 @@
             uiAdmin.rulesTableBody.addEventListener('click', async (event) => {
                 if (event.target.classList.contains('btn-delete-override')) {
                     const sellerCode = event.target.dataset.sellerCode;
-                    if (confirm(`¿Está seguro de que desea eliminar la regla para el vendedor ${sellerCode}?`)) {
+                    showConfirmModal(`¿Está seguro de que desea eliminar la regla para el vendedor ${sellerCode}?`, async () => {
                         ui.toggleLoading(true);
                         try {
                             const result = await runGoogleScript('deleteOverrideRule', sessionToken, sellerCode);
                             ui.showNotification(result, 'success');
-                            await loadAdminData();
+                            event.target.parentElement.parentElement.remove();
                         } catch (error) {
                             ui.showNotification('Error al eliminar regla: ' + error.message, 'error');
                         } finally {
                             ui.toggleLoading(false);
                         }
-                    }
+                    });
                 }
             });
+
+            const refreshOverridesBtn = document.getElementById('refresh-overrides-btn');
+            if(refreshOverridesBtn) {
+                refreshOverridesBtn.addEventListener('click', async () => {
+                    await loadAdminData(true);
+                });
+            }
 
             await loadAdminData();
         }

@@ -12,6 +12,11 @@
     <div id="notification" class="notification"></div>
     <div id="loading-spinner" class="loading-spinner-container"><div class="spinner"></div></div>
 
+    <div id="confirmed-payments-notification" class="notification success" style="display: none;">
+        <p>¡Buenas noticias! Algunos de tus pagos han sido confirmados.</p>
+        <ul id="confirmed-payments-list"></ul>
+    </div>
+
     <div class="app-container">
         <header class="app-header">
             <h2>Bienvenido, <?!= user.name ?></h2>
@@ -504,6 +509,23 @@
                     this.ui.updateRecordsTable(registros);
                 } catch (error) { this.ui.elements.recordsStatus.textContent = 'Error al cargar registros.'; }
             }
+
+            async loadConfirmedPayments() {
+                try {
+                    const notifications = await this.runGoogleScript('getNotificacionesPagosConfirmados', sessionToken);
+                    const notificationArea = document.getElementById('confirmed-payments-notification');
+                    const notificationList = document.getElementById('confirmed-payments-list');
+
+                    if (notifications && notifications.length > 0) {
+                        notificationList.innerHTML = notifications.map(n => `<li>Factura ${n.factura} para ${n.cliente} por ${n.monto} ha sido confirmada.</li>`).join('');
+                        notificationArea.style.display = 'block';
+                    } else {
+                        notificationArea.style.display = 'none';
+                    }
+                } catch (error) {
+                    console.error('Error fetching confirmed payments:', error);
+                }
+            }
             validarFormulario() {
                 let ok = true;
                 document.querySelectorAll('.error').forEach(e => e.style.display = 'none');
@@ -596,6 +618,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             const isNew = new URLSearchParams(window.location.search).get('new_session') === 'true';
             dataManager.loadInitialData(isNew);
+            dataManager.loadConfirmedPayments();
+
+            setInterval(() => {
+                dataManager.loadConfirmedPayments();
+            }, 300000);
 
             uiManager.elements.vendedorSelect.addEventListener('change', () => dataManager.loadClientes());
             uiManager.elements.clienteSelect.addEventListener('change', () => dataManager.loadFacturas());

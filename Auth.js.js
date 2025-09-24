@@ -16,6 +16,9 @@ initializeAuthSecret();
  * @param {string} email El correo del usuario.
  * @returns {string} El rol del usuario ('Analista' o 'Vendedor').
  */
+// --- INICIO DE LA MODIFICACIÓN: Corregir rol de Admin ---
+// Motivo: Los administradores estaban siendo asignados al rol de 'Analista'.
+/*
 function getUserRole(email) {
     const dataFetcher = new DataFetcher(); // Usamos la clase de Codigo.js
     if (dataFetcher.isUserAdmin(email)) {
@@ -24,6 +27,16 @@ function getUserRole(email) {
     // Si no es admin, asumimos que es vendedor. Se podría añadir más lógica si hay más roles.
     return 'Vendedor';
 }
+*/
+function getUserRole(email) {
+    const dataFetcher = new DataFetcher(); // Usamos la clase de Codigo.js
+    if (dataFetcher.isUserAdmin(email)) {
+        return 'Admin';
+    }
+    // Si no es admin, asumimos que es vendedor. Se podría añadir más lógica si hay más roles.
+    return 'Vendedor';
+}
+// --- FIN DE LA MODIFICACIÓN ---
 
 /**
  * Procesa el intento de login de un usuario.
